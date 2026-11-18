@@ -133,7 +133,7 @@ body{margin:0;background:var(--orca-bg,#1b1b1b);color:var(--orca-fg,#eee);font:1
 .hud button.estop{border-color:#b33}
 """
 
-_JS = """
+_JS = r"""
 const q=document.getElementById('q'), w=document.getElementById('w');
 q.oninput=()=>{const s=q.value.toLowerCase();for(const t of document.querySelectorAll('.tile'))t.classList.toggle('hidden',!t.dataset.name.includes(s));};
 w.oninput=()=>document.querySelector('.grid').style.setProperty('--w',w.value+'px');
