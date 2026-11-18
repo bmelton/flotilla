@@ -238,6 +238,8 @@ body{margin:0;background:var(--orca-bg,#1b1b1b);color:var(--orca-fg,#eee);font:1
 .hud{display:none;position:absolute;left:0;right:0;bottom:0;padding:10px 14px;background:rgba(0,0,0,.7);color:#fff;cursor:default}
 .tile.full .hud{display:flex;gap:10px;align-items:center;flex-wrap:wrap} .tile.full .cap{display:none}
 .hud .st{flex:1;min-width:200px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.hud .row{display:flex;gap:10px;align-items:center;flex:1;flex-wrap:wrap} .hud .row[hidden]{display:none}
+.hud .yes.danger{background:#b33;border-color:#e55}
 .hud button{background:#333;color:#fff;border:1px solid #555;border-radius:6px;padding:6px 12px;cursor:pointer}
 .hud button:disabled{opacity:.4;cursor:default} .hud button.arm{background:#b33;border-color:#e55}
 .hud button.estop{border-color:#b33}
@@ -249,21 +251,22 @@ q.oninput=()=>{const s=q.value.toLowerCase();for(const t of document.querySelect
 w.oninput=()=>document.querySelector('.grid').style.setProperty('--w',w.value+'px');
 for(const img of document.querySelectorAll('.tile img')){img.onerror=()=>img.parentElement.classList.add('dead');}
 const unfull=()=>{document.querySelectorAll('.tile.full').forEach(t=>t.classList.remove('full'));if(typeof watch==='function')watch(null);};
-for(const t of document.querySelectorAll('.tile')){t.onclick=()=>{const was=t.classList.contains('full');unfull();if(!was)t.classList.add('full');};}
-document.onkeydown=e=>{if(e.key==='Escape')unfull();};
 const fmt=s=>s==null?'?':(s>=3600?Math.floor(s/3600)+'h':'')+Math.floor(s%3600/60)+'m';
 let timer=null, cur=null;
 const send=m=>orca.postMessage(m);
 function poll(){if(cur)send({cmd:'status',host:cur.dataset.host});}
 function watch(t){cur=t;clearInterval(timer);if(t){poll();timer=setInterval(poll,3000);}}
-for(const t of document.querySelectorAll('.tile')){t.onclick=e=>{if(e.target.closest('.hud'))return;const was=t.classList.contains('full');unfull();if(!was){t.classList.add('full');watch(t);}else watch(null);};}
-document.querySelectorAll('.hud button').forEach(b=>b.onclick=()=>{
-  const t=b.closest('.tile'), host=t.dataset.host, cmd=b.dataset.cmd;
-  if(cmd==='open')return send({cmd:'open',host});
-  if(!b.dataset.confirm||b.classList.contains('arm')){b.classList.remove('arm');if(b.dataset.label)b.textContent=b.dataset.label;b.disabled=true;send({cmd,host});return;}
-  b.classList.add('arm');b.dataset.label=b.textContent;b.textContent='✓ Confirm '+b.dataset.label.replace(/^\S+ /,'')+'?';
-  setTimeout(()=>{if(b.classList.contains('arm')){b.classList.remove('arm');b.textContent=b.dataset.label;}},4000);
-});
+for(const t of document.querySelectorAll('.tile')){t.onclick=e=>{if(e.target.closest('.hud'))return;if(t.querySelector('.hud').dataset.state==='confirm'){disarm(t);return;}const was=t.classList.contains('full');unfull();if(!was){t.classList.add('full');watch(t);}else watch(null);};}
+const QUESTION={pause:['Pause this print?','Yes, pause'],resume:['Resume this print?','Yes, resume'],cancel:['Cancel this print?','Yes, cancel'],estop:['Emergency stop?','Yes, stop']};
+function disarm(t){const h=t.querySelector('.hud');clearTimeout(h._t);h.dataset.state='idle';h.querySelector('.confirm').hidden=true;h.querySelector('.actions').hidden=false;}
+function arm(t,cmd){const h=t.querySelector('.hud');disarm(t);h.dataset.state='confirm';const [q,y]=QUESTION[cmd];
+  h.querySelector('.q').textContent=q;const yes=h.querySelector('.yes');yes.textContent=y;yes.dataset.cmd=cmd;yes.classList.toggle('danger',cmd==='cancel'||cmd==='estop');
+  h.querySelector('.actions').hidden=true;h.querySelector('.confirm').hidden=false;h._t=setTimeout(()=>disarm(t),6000);}
+function fire(t,cmd){const h=t.querySelector('.hud');disarm(t);h.dataset.state='busy';h.querySelectorAll('button').forEach(b=>b.disabled=true);send({cmd,host:t.dataset.host});}
+document.querySelectorAll('.hud .actions button').forEach(b=>b.onclick=()=>{const t=b.closest('.tile');if(b.dataset.cmd==='open')return send({cmd:'open',host:t.dataset.host});b.dataset.confirm?arm(t,b.dataset.cmd):fire(t,b.dataset.cmd);});
+document.querySelectorAll('.hud .yes').forEach(b=>b.onclick=()=>fire(b.closest('.tile'),b.dataset.cmd));
+document.querySelectorAll('.hud .no').forEach(b=>b.onclick=()=>disarm(b.closest('.tile')));
+document.onkeydown=e=>{if(e.key!=='Escape')return;const c=document.querySelector('.hud[data-state=confirm]');c?disarm(c.closest('.tile')):unfull();};
 function render(t,d){
   t.querySelector('.st').textContent=`${d.state}${d.file?' · '+d.file:''}${d.progress?' · '+d.progress+'%':''} · ${fmt(d.elapsed)}${d.remaining!=null?' / ~'+fmt(d.remaining)+' left':''} · nozzle ${d.nozzle[0]}/${d.nozzle[1]} · bed ${d.bed[0]}/${d.bed[1]}`;
   const printing=d.state==='printing', paused=d.state==='paused';
@@ -276,8 +279,8 @@ orca.onMessage(m=>{
   const t=document.querySelector(`.tile[data-host="${CSS.escape(m.host)}"]`); if(!t)return;
   if(m.type==='status')render(t,m.data);
   else if(m.type==='error'){t.querySelector('.st').textContent=m.message;t.querySelectorAll('[data-cmd=pause],[data-cmd=resume],[data-cmd=cancel]').forEach(b=>b.disabled=true);}
-  if(m.type==='done'){t.querySelectorAll('.hud button').forEach(b=>b.disabled=false);poll();}
-  if(m.type==='error')t.querySelector('[data-cmd=estop]').disabled=false;
+  if(m.type==='done'){t.querySelector('.hud').dataset.state='idle';t.querySelectorAll('.hud button').forEach(b=>b.disabled=false);poll();}
+  if(m.type==='error'){t.querySelector('.hud').dataset.state='idle';t.querySelectorAll('[data-cmd=estop],[data-cmd=open],.no').forEach(b=>b.disabled=false);}
 });
 """
 
@@ -289,9 +292,10 @@ def page_html(items: list[dict]) -> str:
         body = "".join(
             f"<div class='tile{'' if t['url'] else ' dead'}' data-name='{html.escape(t['name'].lower())}' data-host='{html.escape(t['host'])}'>"
             f"<img src='{html.escape(t['url'])}' alt=''><div class='cap'>{html.escape(t['name'])}</div>"
-            f"<div class='hud'><span class='st'>{html.escape(t['name'])} · connecting…</span>"
-            f"<button data-cmd='pause' data-confirm='1' disabled>⏸ Pause</button><button data-cmd='cancel' data-confirm='1' disabled>⏹ Cancel</button>"
-            f"<button class='estop' data-cmd='estop' data-confirm='1'>⚠ E-Stop</button><button data-cmd='open'>↗ Open in browser</button></div></div>"
+            f"<div class='hud' data-state='idle'><span class='st'>{html.escape(t['name'])} · connecting…</span>"
+            f"<div class='row actions'><button data-cmd='pause' data-confirm='1' disabled>⏸ Pause</button><button data-cmd='cancel' data-confirm='1' disabled>⏹ Cancel</button>"
+            f"<button class='estop' data-cmd='estop' data-confirm='1'>⚠ E-Stop</button><button data-cmd='open'>↗ Open in browser</button></div>"
+            f"<div class='row confirm' hidden><span class='q'></span><button class='yes'></button><button class='no'>No</button></div></div></div>"
             for t in items)
         body = f"<div class='grid'>{body}</div>"
     return (f"<!doctype html><html><head><meta charset='utf-8'><style>{_CSS}</style></head><body>"
@@ -405,7 +409,7 @@ if __name__ == "__main__":
                                "heater_bed": {"temperature": 59.6, "target": 60}}})
     assert sm["progress"] == 25 and sm["remaining"] == 1800 and sm["nozzle"] == [210, 210], sm
     assert summarize({"status": {}})["remaining"] is None
-    assert "data-host='b'" in page_html(t) and "⚠ E-Stop" in page_html(t)
+    assert "data-host='b'" in page_html(t) and "⚠ E-Stop" in page_html(t) and "class='row confirm'" in page_html(t)
     ss = summarize_sdcp({"PrintInfo": {"Status": 13, "CurrentLayer": 9, "TotalLayer": 73, "CurrentTicks": 2615.4,
                                        "TotalTicks": 10314, "Filename": "x.gcode", "Progress": 20},
                          "TempOfNozzle": 234.85, "TempTargetNozzle": 235, "TempOfHotbed": 80.1, "TempTargetHotbed": 80})
