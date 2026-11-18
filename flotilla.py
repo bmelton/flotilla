@@ -150,7 +150,7 @@ for(const t of document.querySelectorAll('.tile')){t.onclick=e=>{if(e.target.clo
 document.querySelectorAll('.hud button').forEach(b=>b.onclick=()=>{
   const t=b.closest('.tile'), host=t.dataset.host, cmd=b.dataset.cmd;
   if(cmd==='open')return send({cmd:'open',host});
-  if(!b.dataset.confirm||b.classList.contains('arm')){b.classList.remove('arm');b.disabled=true;send({cmd,host});return;}
+  if(!b.dataset.confirm||b.classList.contains('arm')){b.classList.remove('arm');if(b.dataset.label)b.textContent=b.dataset.label;b.disabled=true;send({cmd,host});return;}
   b.classList.add('arm');b.dataset.label=b.textContent;b.textContent='✓ Confirm '+b.dataset.label.replace(/^\S+ /,'')+'?';
   setTimeout(()=>{if(b.classList.contains('arm')){b.classList.remove('arm');b.textContent=b.dataset.label;}},4000);
 });
@@ -165,8 +165,9 @@ orca.onMessage(m=>{
   if(typeof m==='string')m=JSON.parse(m);
   const t=document.querySelector(`.tile[data-host="${CSS.escape(m.host)}"]`); if(!t)return;
   if(m.type==='status')render(t,m.data);
-  else if(m.type==='error')t.querySelector('.st').textContent=m.message;
-  if(m.type!=='status'){t.querySelectorAll('.hud button').forEach(b=>b.disabled=false);poll();}
+  else if(m.type==='error'){t.querySelector('.st').textContent=m.message;t.querySelectorAll('[data-cmd=pause],[data-cmd=resume],[data-cmd=cancel]').forEach(b=>b.disabled=true);}
+  if(m.type==='done'){t.querySelectorAll('.hud button').forEach(b=>b.disabled=false);poll();}
+  if(m.type==='error')t.querySelector('[data-cmd=estop]').disabled=false;
 });
 """
 
