@@ -1,0 +1,63 @@
+"""Pure-function tests. Run: python3 -m unittest discover tests"""
+import json
+import pathlib
+import sys
+import tempfile
+import unittest
+
+sys.path.insert(0, str(pathlib.Path(__file__).resolve().parents[1] / "src"))
+import flotilla as f  # noqa: E402
+
+
+class Urls(unittest.TestCase):
+    def test_default_url(self):
+        self.assertEqual(f.default_url("sv08.local", "moonraker"), "http://sv08.local/webcam/?action=stream")
+        self.assertEqual(f.default_url("https://q2.lan:7125/", ""), "https://q2.lan:7125/webcam/?action=stream")
+        self.assertEqual(f.default_url("cc.lan", "ElegooLink"), "http://cc.lan:3031/video")
+        self.assertEqual(f.default_url("", "moonraker"), "")
+
+
+class Printers(unittest.TestCase):
+    def test_dedupe_and_tiles(self):
+        d = f.dedupe([{"name": "SV08 - Copy", "print_host": "a", "host_type": ""}, {"name": "SV08", "print_host": "a", "host_type": ""},
+                      {"name": "sys", "print_host": "", "host_type": ""}, {"name": "Q2", "print_host": "b", "host_type": ""}])
+        self.assertEqual([p["name"] for p in d], ["Q2", "SV08"])
+        t = f.tiles([{"name": "Q2", "print_host": "b", "host_type": ""}], {"Q2": "http://relay/x"})
+        self.assertEqual(t[0]["url"], "http://relay/x")
+        page = f.page_html(t)
+        for needle in ("Q2", "data-host='b'", "⚠ E-Stop", "class='row confirm'", "id='ar'"):
+            self.assertIn(needle, page)
+        self.assertIn("Q2", f.config_html(d))
+
+
+class Status(unittest.TestCase):
+    def test_moonraker(self):
+        sm = f.summarize({"status": {"print_stats": {"state": "printing", "filename": "a.gcode", "print_duration": 600},
+                                     "display_status": {"progress": 0.25}, "extruder": {"temperature": 210.4, "target": 210},
+                                     "heater_bed": {"temperature": 59.6, "target": 60}}})
+        self.assertEqual((sm["progress"], sm["remaining"], sm["nozzle"]), (25, 1800, [210, 210]))
+        self.assertIsNone(f.summarize({"status": {}})["remaining"])
+
+    def test_sdcp(self):
+        ss = f.summarize_sdcp({"PrintInfo": {"Status": 13, "CurrentTicks": 2615.4, "TotalTicks": 10314, "Filename": "x.gcode", "Progress": 20},
+                               "TempOfNozzle": 234.85, "TempTargetNozzle": 235, "TempOfHotbed": 80.1, "TempTargetHotbed": 80})
+        self.assertEqual((ss["state"], ss["remaining"], ss["nozzle"]), ("printing", 7698, [235, 235]))
+        self.assertEqual(f.summarize_sdcp({"PrintInfo": {"Status": 6}})["state"], "paused")
+
+
+class Log(unittest.TestCase):
+    def test_jsonl_with_printer_context(self):
+        d = pathlib.Path(tempfile.mkdtemp())
+        old = f.log_path
+        f.log_path = lambda: d / "flotilla.log"
+        try:
+            f._names["h"] = "P"; f._firmware["h"] = "fw1"
+            f.log("status", "h", cmd="status", state="printing"); f.log("plugin_loaded", python="3")
+            lines = [json.loads(l) for l in f.log_path().read_text().splitlines()]
+        finally:
+            f.log_path = old
+        self.assertEqual((lines[0]["printer"], lines[0]["firmware"], lines[1]["event"]), ("P", "fw1", "plugin_loaded"))
+
+
+if __name__ == "__main__":
+    unittest.main()

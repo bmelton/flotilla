@@ -1,6 +1,8 @@
 # Flotilla
 
-OrcaSlicer plugin that adds a **Flotilla** tab: a live camera grid for every printer OrcaSlicer knows about, Watchtower-style. Orca's Device tab only shows the selected printer; this shows all of them.
+OrcaSlicer plugin that adds a **Flotilla** tab: a live camera grid for every printer OrcaSlicer knows about, with a fullscreen view that shows print status and offers Pause/Resume, Cancel, and E-Stop. Orca's Device tab only shows the selected printer; this shows all of them.
+
+Requires OrcaSlicer 2.5+ (plugin pages). No dependencies; one file, standard library only.
 
 <img width="1712" height="1104" alt="image" src="https://github.com/user-attachments/assets/14b3812d-c1cf-438e-a3f1-bced8cd792cc" />
 
@@ -9,26 +11,28 @@ OrcaSlicer plugin that adds a **Flotilla** tab: a live camera grid for every pri
 
 ## Install
 
-Requires OrcaSlicer 2.5+ (plugin pages).
+Download `src/flotilla.py`, then in OrcaSlicer: Plugins → **Install local plugin** → pick the file. Or copy it to `<Orca data dir>/orca_plugins/flotilla/flotilla.py` and restart Orca.
 
-Plugins dialog → **Install local plugin** → pick `flotilla.py`. Or copy it to `<Orca data dir>/orca_plugins/flotilla/flotilla.py` and restart.
+## Features
 
-## How it works
-
-- Every printer preset with a `print_host` gets a tile (deduped by host).
-- Click a tile to fill the tab. The HUD shows status and offers Pause/Resume, Cancel, E-Stop, and Open in browser. Controls work on Moonraker printers and Elegoo (SDCP) printers; the protocol is auto-detected per host.
-- The stream URL is guessed from `host_type`: Moonraker/Fluidd/Mainsail/OctoPrint/Qidi use `/webcam/?action=stream`, Elegoo uses `:3031/video`, PrusaLink `/webcam/snapshot`.
-- Override any URL in the plugin's config page. Useful for Bambu printers, which have no HTTP stream: point a [go2rtc](https://github.com/AlexxIT/go2rtc) relay at them and paste its MJPEG URL.
-- Search box and tile-size slider in the tab bar.
-
-## Dev
-
-```
-python3 flotilla.py   # runs the self-check, prints "ok"
-```
+- One tile per printer preset that has a `print_host` (deduped by host). Search box and tile-size slider.
+- Click a tile to fill the tab. The HUD shows state, file, progress, time, and temperatures, with Pause/Resume, Cancel, E-Stop (each behind a confirm), and Open in browser.
+- Supported control protocols, auto-detected per host: **Moonraker** (Klipper: Sovol, Qidi, Mainsail/Fluidd setups) and **Elegoo SDCP** (Centauri Carbon). Others get camera only.
+- Camera URL is guessed from `host_type` (`/webcam/?action=stream` for Moonraker and OctoPrint, `:3031/video` for Elegoo, `/webcam/snapshot` for PrusaLink) and can be overridden per printer in the plugin's config page. Bambu printers have no HTTP stream; point a [go2rtc](https://github.com/AlexxIT/go2rtc) relay at them and paste its MJPEG URL.
+- Dead tiles retry on the **Auto-retry** interval in the tab bar (default on, 1 minute).
 
 ## Troubleshooting
 
-Flotilla writes one JSON-lines log, `flotilla.log`, in its plugin storage folder (`<Orca data dir>/orca_plugins/plugin_data/<plugin id>/`). The **Log** button in the tab bar opens it. Every entry carries the printer name, host, detected protocol, firmware, the command, timing, and the error if any. It rotates to `flotilla.log.1` at 2 MB. Send both files when reporting a problem.
+Flotilla writes one JSON-lines log, `flotilla.log`, in its plugin storage folder (`<Orca data dir>/orca_plugins/plugin_data/<plugin id>/`). The **Log** button in the tab bar opens it. Each entry carries the printer name, host, detected protocol, firmware, the command, timing, and the error if any. It rotates to `flotilla.log.1` at 2 MB. Attach both files to a bug report.
 
-Dead camera tiles retry on the interval set by the **Auto-retry** control in the tab bar (default on, 1 minute). Turn it off or lengthen it for large fleets.
+## Development
+
+```
+python3 -m unittest discover -s tests -v
+```
+
+The plugin is deliberately a single file so Orca can install it directly. Keep it that way.
+
+## License
+
+[MIT](LICENSE.md)
