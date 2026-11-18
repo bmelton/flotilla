@@ -151,14 +151,14 @@ document.querySelectorAll('.hud button').forEach(b=>b.onclick=()=>{
   const t=b.closest('.tile'), host=t.dataset.host, cmd=b.dataset.cmd;
   if(cmd==='open')return send({cmd:'open',host});
   if(!b.dataset.confirm||b.classList.contains('arm')){b.classList.remove('arm');b.disabled=true;send({cmd,host});return;}
-  b.classList.add('arm');b.dataset.label=b.textContent;b.textContent='Confirm '+b.dataset.label+'?';
+  b.classList.add('arm');b.dataset.label=b.textContent;b.textContent='✓ Confirm '+b.dataset.label.replace(/^\S+ /,'')+'?';
   setTimeout(()=>{if(b.classList.contains('arm')){b.classList.remove('arm');b.textContent=b.dataset.label;}},4000);
 });
 function render(t,d){
   t.querySelector('.st').textContent=`${d.state}${d.file?' · '+d.file:''}${d.progress?' · '+d.progress+'%':''} · ${fmt(d.elapsed)}${d.remaining!=null?' / ~'+fmt(d.remaining)+' left':''} · nozzle ${d.nozzle[0]}/${d.nozzle[1]} · bed ${d.bed[0]}/${d.bed[1]}`;
   const printing=d.state==='printing', paused=d.state==='paused';
   const pr=t.querySelector('[data-cmd=pause],[data-cmd=resume]');
-  pr.dataset.cmd=paused?'resume':'pause'; pr.textContent=paused?'Resume':'Pause'; pr.disabled=!(printing||paused);
+  pr.dataset.cmd=paused?'resume':'pause'; pr.textContent=paused?'▶ Resume':'⏸ Pause'; pr.disabled=!(printing||paused);
   t.querySelector('[data-cmd=cancel]').disabled=!(printing||paused);
 }
 orca.onMessage(m=>{
@@ -179,8 +179,8 @@ def page_html(items: list[dict]) -> str:
             f"<div class='tile{'' if t['url'] else ' dead'}' data-name='{html.escape(t['name'].lower())}' data-host='{html.escape(t['host'])}'>"
             f"<img src='{html.escape(t['url'])}' alt=''><div class='cap'>{html.escape(t['name'])}</div>"
             f"<div class='hud'><span class='st'>{html.escape(t['name'])} · connecting…</span>"
-            f"<button data-cmd='pause' data-confirm='1' disabled>Pause</button><button data-cmd='cancel' data-confirm='1' disabled>Cancel</button>"
-            f"<button class='estop' data-cmd='estop' data-confirm='1'>E-Stop</button><button data-cmd='open'>Open in browser</button></div></div>"
+            f"<button data-cmd='pause' data-confirm='1' disabled>⏸ Pause</button><button data-cmd='cancel' data-confirm='1' disabled>⏹ Cancel</button>"
+            f"<button class='estop' data-cmd='estop' data-confirm='1'>⚠ E-Stop</button><button data-cmd='open'>↗ Open in browser</button></div></div>"
             for t in items)
         body = f"<div class='grid'>{body}</div>"
     return (f"<!doctype html><html><head><meta charset='utf-8'><style>{_CSS}</style></head><body>"
@@ -292,5 +292,5 @@ if __name__ == "__main__":
                                "heater_bed": {"temperature": 59.6, "target": 60}}})
     assert sm["progress"] == 25 and sm["remaining"] == 1800 and sm["nozzle"] == [210, 210], sm
     assert summarize({"status": {}})["remaining"] is None
-    assert "data-host='b'" in page_html(t) and "E-Stop" in page_html(t)
+    assert "data-host='b'" in page_html(t) and "⚠ E-Stop" in page_html(t)
     print("ok")
