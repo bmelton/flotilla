@@ -15,9 +15,14 @@ can be overridden per printer in the plugin's config page.
 """
 from __future__ import annotations
 
+import base64
 import html
 import json
+import os
+import socket
+import struct
 import threading
+import time
 import urllib.request
 import webbrowser
 
@@ -79,7 +84,7 @@ def tiles(printers: list[dict], cfg: dict) -> list[dict]:
 
 
 # --- Moonraker --------------------------------------------------------------------
-# ponytail: Moonraker only. Elegoo's SDCP websocket and OctoPrint's REST get "unsupported".
+# ponytail: Moonraker and Elegoo SDCP. OctoPrint/PrusaLink get "unsupported".
 _QUERY = "/printer/objects/query?print_stats&display_status&extruder&heater_bed"
 _ACTIONS = {"pause": "/printer/print/pause", "resume": "/printer/print/resume",
             "cancel": "/printer/print/cancel", "estop": "/printer/emergency_stop"}
@@ -109,6 +114,109 @@ def moonraker(host: str, cmd: str) -> dict:
         return {"type": "status", "host": host, "data": summarize(_http(base + _QUERY)["result"])}
     _http(base + _ACTIONS[cmd], "POST")
     return {"type": "done", "host": host, "cmd": cmd}
+
+
+# --- Elegoo SDCP (websocket on :3030) ------------------------------------------------
+# Minimal RFC 6455 client: text frames only, no fragmentation. Enough for request/response.
+def _ws_connect(host: str, port: int, path: str, timeout: float = 5) -> socket.socket:
+    s = socket.create_connection((host, port), timeout=timeout)
+    key = base64.b64encode(os.urandom(16)).decode()
+    s.sendall((f"GET {path} HTTP/1.1\r\nHost: {host}:{port}\r\nUpgrade: websocket\r\nConnection: Upgrade\r\n"
+               f"Sec-WebSocket-Key: {key}\r\nSec-WebSocket-Version: 13\r\n\r\n").encode())
+    buf = b""
+    while b"\r\n\r\n" not in buf:
+        buf += s.recv(4096)
+    if b" 101 " not in buf.split(b"\r\n", 1)[0]:
+        raise ConnectionError("websocket handshake refused")
+    return s
+
+
+def _ws_read(s: socket.socket, n: int) -> bytes:
+    b = b""
+    while len(b) < n:
+        c = s.recv(n - len(b))
+        if not c:
+            raise ConnectionError("websocket closed")
+        b += c
+    return b
+
+
+def _ws_recv(s: socket.socket) -> str:
+    h = _ws_read(s, 2)
+    ln = h[1] & 0x7F
+    if ln == 126:
+        ln = struct.unpack(">H", _ws_read(s, 2))[0]
+    elif ln == 127:
+        ln = struct.unpack(">Q", _ws_read(s, 8))[0]
+    return _ws_read(s, ln).decode(errors="replace")
+
+
+def _ws_send(s: socket.socket, text: str) -> None:
+    p = text.encode()
+    m = os.urandom(4)
+    h = bytes([0x81]) + (bytes([0x80 | len(p)]) if len(p) < 126 else bytes([0x80 | 126]) + struct.pack(">H", len(p)))
+    s.sendall(h + m + bytes(b ^ m[i % 4] for i, b in enumerate(p)))
+
+
+_SDCP_CMD = {"pause": 129, "cancel": 130, "resume": 131}
+_SDCP_STATE = {0: "standby", 1: "homing", 5: "pausing", 6: "paused", 7: "stopping", 8: "cancelled",
+               9: "complete", 13: "printing", 15: "heating", 16: "printing", 20: "printing"}
+
+
+def summarize_sdcp(status: dict) -> dict:
+    pi = status.get("PrintInfo", {})
+    code = pi.get("Status", 0)
+    done, total = pi.get("CurrentTicks") or 0, pi.get("TotalTicks") or 0
+    return {"state": _SDCP_STATE.get(code, f"status {code}"), "file": pi.get("Filename", ""),
+            "progress": pi.get("Progress", 0), "elapsed": int(done),
+            "remaining": int(total - done) if total > done else None,
+            "nozzle": [round(status.get("TempOfNozzle", 0)), round(status.get("TempTargetNozzle", 0))],
+            "bed": [round(status.get("TempOfHotbed", 0)), round(status.get("TempTargetHotbed", 0))]}
+
+
+def sdcp(host: str, cmd: str) -> dict:
+    if cmd == "estop":
+        raise ValueError("Elegoo SDCP has no emergency stop; use Cancel")
+    hostname = base_url(host).split("://", 1)[1].split("/")[0].split(":")[0]
+    s = _ws_connect(hostname, 3030, "/websocket")
+    try:
+        # The printer pushes a status frame right after connect; it carries the MainboardID.
+        for _ in range(6):
+            msg = json.loads(_ws_recv(s))
+            if "Status" in msg:
+                break
+        else:
+            raise ConnectionError("no SDCP status frame")
+        if cmd == "status":
+            return {"type": "status", "host": host, "data": summarize_sdcp(msg["Status"])}
+        rid = os.urandom(8).hex()
+        _ws_send(s, json.dumps({"Id": "", "Data": {"Cmd": _SDCP_CMD[cmd], "Data": {}, "RequestID": rid,
+                                "MainboardID": msg["MainboardID"], "TimeStamp": int(time.time() * 1000), "From": 1}}))
+        for _ in range(10):
+            r = json.loads(_ws_recv(s))
+            if r.get("Data", {}).get("RequestID") == rid:
+                if r["Data"].get("Data", {}).get("Ack", 1) != 0:
+                    raise RuntimeError(f"printer refused ({r['Data']['Data']})")
+                return {"type": "done", "host": host, "cmd": cmd}
+        raise TimeoutError("no SDCP ack")
+    finally:
+        s.close()
+
+
+_proto: dict[str, object] = {}  # host -> client fn that last worked
+
+
+def control(host: str, cmd: str) -> dict:
+    fns = [_proto[host]] if host in _proto else [moonraker, sdcp]
+    err: Exception = RuntimeError("no client")
+    for fn in fns:
+        try:
+            out = fn(host, cmd)
+            _proto[host] = fn
+            return out
+        except Exception as e:
+            err = e
+    raise err
 
 
 _CSS = """
@@ -245,7 +353,7 @@ if orca is not None:
                     return
                 def work():
                     try:
-                        self.post_message(moonraker(host, cmd))
+                        self.post_message(control(host, cmd))
                     except Exception as e:
                         self.post_message({"type": "error", "host": host, "message": f"unsupported or offline ({e.__class__.__name__})"})
                 # on_message runs on the UI thread; a dead host would freeze Orca for the timeout.
@@ -270,8 +378,10 @@ if orca is not None:
     class FlotillaPlugin(orca.base):
         def register_capabilities(self):
             try:
-                hosts = [base_url(p["print_host"]) for p in printers_from_bundle()]
-                orca.request_permissions(network_http=hosts, threading=True)
+                ps = printers_from_bundle()
+                hosts = [base_url(p["print_host"]) for p in ps]
+                socks = [str((base_url(p["print_host"]).split("://", 1)[1].split("/")[0].split(":")[0], 3030)) for p in ps]
+                orca.request_permissions(network_http=hosts, network_socket=socks, threading=True)
             except Exception:
                 pass  # bundle not ready or older host: first use prompts instead
             orca.register_capability(_Capability)
@@ -294,4 +404,9 @@ if __name__ == "__main__":
     assert sm["progress"] == 25 and sm["remaining"] == 1800 and sm["nozzle"] == [210, 210], sm
     assert summarize({"status": {}})["remaining"] is None
     assert "data-host='b'" in page_html(t) and "⚠ E-Stop" in page_html(t)
+    ss = summarize_sdcp({"PrintInfo": {"Status": 13, "CurrentLayer": 9, "TotalLayer": 73, "CurrentTicks": 2615.4,
+                                       "TotalTicks": 10314, "Filename": "x.gcode", "Progress": 20},
+                         "TempOfNozzle": 234.85, "TempTargetNozzle": 235, "TempOfHotbed": 80.1, "TempTargetHotbed": 80})
+    assert ss["state"] == "printing" and ss["remaining"] == 7698 and ss["nozzle"] == [235, 235], ss
+    assert summarize_sdcp({"PrintInfo": {"Status": 6}})["state"] == "paused"
     print("ok")
