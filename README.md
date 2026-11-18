@@ -26,4 +26,4 @@ python3 flotilla.py   # runs the self-check, prints "ok"
 
 Flotilla writes one JSON-lines log, `flotilla.log`, in its plugin storage folder (`<Orca data dir>/orca_plugins/plugin_data/<plugin id>/`). The **Log** button in the tab bar opens it. Every entry carries the printer name, host, detected protocol, firmware, the command, timing, and the error if any. It rotates to `flotilla.log.1` at 2 MB. Send both files when reporting a problem.
 
-Dead camera tiles retry every 60 seconds.
+Dead camera tiles retry on the interval set by the **Auto-retry** control in the tab bar (default on, 1 minute). Turn it off or lengthen it for large fleets.

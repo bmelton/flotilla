@@ -279,6 +279,8 @@ _CSS = """
 body{margin:0;background:var(--orca-bg,#1b1b1b);color:var(--orca-fg,#eee);font:14px var(--orca-font,system-ui)}
 .bar{display:flex;gap:8px;align-items:center;padding:8px 12px;border-bottom:1px solid var(--orca-border,#333)}
 .bar button{background:transparent;color:inherit;border:1px solid var(--orca-border,#444);border-radius:6px;padding:6px 10px;cursor:pointer}
+.bar .retry{margin-left:auto;display:flex;gap:6px;align-items:center;white-space:nowrap} .bar .retry input{flex:none}
+.bar select{background:transparent;color:inherit;border:1px solid var(--orca-border,#444);border-radius:6px;padding:6px}
 .bar input{flex:1;max-width:360px;background:transparent;color:inherit;border:1px solid var(--orca-border,#444);border-radius:6px;padding:6px 10px}
 .grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(var(--w,340px),1fr));gap:12px;padding:12px}
 .tile{position:relative;background:#000;border:1px solid var(--orca-border,#333);border-radius:6px;overflow:hidden;aspect-ratio:4/3}
@@ -310,7 +312,11 @@ for(const img of document.querySelectorAll('.tile img')){const t=img.parentEleme
   img.onerror=()=>{if(!t.classList.contains('dead')){t.classList.add('dead');plog(t,'stream_dead',{url:img.dataset.src});}};
   img.onload=()=>{if(t.classList.contains('dead')){t.classList.remove('dead');plog(t,'stream_recovered');}};}
 // ponytail: retry dead tiles every 60s. A stream that freezes mid-print without an error isn't detected; click the tile to force a reload.
-setInterval(()=>{for(const t of document.querySelectorAll('.tile.dead')){const img=t.querySelector('img');if(img.dataset.src)img.src=img.dataset.src+(img.dataset.src.includes('?')?'&':'?')+'_r='+Date.now();}},60000);
+const ar=document.getElementById('ar'), ai=document.getElementById('ai'); let retryTimer=null;
+try{const sv=JSON.parse(localStorage.getItem('retry')||'{}');if('on'in sv)ar.checked=sv.on;if(sv.s)ai.value=String(sv.s);}catch(e){}
+function retryDead(){for(const t of document.querySelectorAll('.tile.dead')){const img=t.querySelector('img');if(img.dataset.src)img.src=img.dataset.src+(img.dataset.src.includes('?')?'&':'?')+'_r='+Date.now();}}
+function schedule(){clearInterval(retryTimer);ai.disabled=!ar.checked;if(ar.checked)retryTimer=setInterval(retryDead,ai.value*1000);try{localStorage.setItem('retry',JSON.stringify({on:ar.checked,s:+ai.value}));}catch(e){}}
+ar.onchange=ai.onchange=schedule; schedule();
 window.onerror=(m,src,line)=>orca.postMessage({cmd:'log',event:'js_error',level:'error',fields:{message:String(m),line}});
 const unfull=()=>{document.querySelectorAll('.tile.full').forEach(t=>t.classList.remove('full'));if(typeof watch==='function')watch(null);};
 const fmt=s=>s==null?'?':(s>=3600?Math.floor(s/3600)+'h':'')+Math.floor(s%3600/60)+'m';
@@ -363,6 +369,9 @@ def page_html(items: list[dict]) -> str:
     return (f"<!doctype html><html><head><meta charset='utf-8'><style>{_CSS}</style></head><body>"
             f"<div class='bar'><input id='q' placeholder='Search printers…'>"
             f"<input id='w' type='range' min='200' max='800' value='340' style='max-width:160px'>"
+            f"<label class='retry'><input id='ar' type='checkbox' checked> Auto-retry</label>"
+            f"<select id='ai'><option value='1'>1 second</option><option value='5'>5 seconds</option><option value='10'>10 seconds</option>"
+            f"<option value='30'>30 seconds</option><option value='60' selected>1 minute</option><option value='300'>5 minutes</option></select>"
             f"<button id='log' title='Open flotilla.log'>Log</button></div>"
             f"{body}<script>{_JS}</script></body></html>")
 
