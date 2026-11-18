@@ -4,9 +4,9 @@ OrcaSlicer plugin that adds a **Flotilla** tab: a live camera grid for every pri
 
 Requires OrcaSlicer 2.5+ (plugin pages). No dependencies; one file, standard library only.
 
-<img width="1712" height="1104" alt="image" src="https://github.com/user-attachments/assets/14b3812d-c1cf-438e-a3f1-bced8cd792cc" />
+![Flotilla camera grid](docs/grid.png)
 
-<img width="1716" height="1098" alt="image" src="https://github.com/user-attachments/assets/d4e7a3dc-a474-46cd-8cc0-a9a3c594e961" />
+![Fullscreen tile with HUD](docs/hud.png)
 
 
 ## Install
