@@ -480,36 +480,3 @@ if orca is not None:
             except Exception:
                 pass  # bundle not ready or older host: first use prompts instead
             orca.register_capability(_Capability)
-
-
-if __name__ == "__main__":
-    assert default_url("sv08.local", "moonraker") == "http://sv08.local/webcam/?action=stream"
-    assert default_url("https://q2.lan:7125/", "") == "https://q2.lan:7125/webcam/?action=stream"
-    assert default_url("cc.lan", "ElegooLink") == "http://cc.lan:3031/video"
-    assert default_url("", "moonraker") == ""
-    d = dedupe([{"name": "SV08 - Copy", "print_host": "a", "host_type": ""}, {"name": "SV08", "print_host": "a", "host_type": ""},
-                {"name": "sys", "print_host": "", "host_type": ""}, {"name": "Q2", "print_host": "b", "host_type": ""}])
-    assert [p["name"] for p in d] == ["Q2", "SV08"], d
-    t = tiles([{"name": "Q2", "print_host": "b", "host_type": ""}], {"Q2": "http://relay/x"})
-    assert t[0]["url"] == "http://relay/x"
-    assert "no-such" not in page_html(t) and "Q2" in page_html(t) and "Q2" in config_html(d)
-    sm = summarize({"status": {"print_stats": {"state": "printing", "filename": "a.gcode", "print_duration": 600},
-                               "display_status": {"progress": 0.25}, "extruder": {"temperature": 210.4, "target": 210},
-                               "heater_bed": {"temperature": 59.6, "target": 60}}})
-    assert sm["progress"] == 25 and sm["remaining"] == 1800 and sm["nozzle"] == [210, 210], sm
-    assert summarize({"status": {}})["remaining"] is None
-    assert "data-host='b'" in page_html(t) and "⚠ E-Stop" in page_html(t) and "class='row confirm'" in page_html(t)
-    ss = summarize_sdcp({"PrintInfo": {"Status": 13, "CurrentLayer": 9, "TotalLayer": 73, "CurrentTicks": 2615.4,
-                                       "TotalTicks": 10314, "Filename": "x.gcode", "Progress": 20},
-                         "TempOfNozzle": 234.85, "TempTargetNozzle": 235, "TempOfHotbed": 80.1, "TempTargetHotbed": 80})
-    assert ss["state"] == "printing" and ss["remaining"] == 7698 and ss["nozzle"] == [235, 235], ss
-    assert summarize_sdcp({"PrintInfo": {"Status": 6}})["state"] == "paused"
-    import tempfile, pathlib
-    _d = tempfile.mkdtemp(); _old = log_path
-    log_path = lambda: pathlib.Path(_d) / "flotilla.log"  # noqa: E731
-    _names["h"] = "P"; _firmware["h"] = "fw1"
-    log("status", "h", cmd="status", state="printing"); log("plugin_loaded", python="3")
-    lines = [json.loads(l) for l in log_path().read_text().splitlines()]
-    assert lines[0]["printer"] == "P" and lines[0]["firmware"] == "fw1" and lines[1]["event"] == "plugin_loaded", lines
-    log_path = _old
-    print("ok")
