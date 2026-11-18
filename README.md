@@ -11,6 +11,7 @@ Plugins dialog → **Install local plugin** → pick `flotilla.py`. Or copy it t
 ## How it works
 
 - Every printer preset with a `print_host` gets a tile (deduped by host).
+- Click a tile to fill the tab. The HUD shows status and offers Pause/Resume, Cancel, E-Stop, and Open in browser. Controls work on Moonraker printers and Elegoo (SDCP) printers; the protocol is auto-detected per host.
 - The stream URL is guessed from `host_type`: Moonraker/Fluidd/Mainsail/OctoPrint/Qidi use `/webcam/?action=stream`, Elegoo uses `:3031/video`, PrusaLink `/webcam/snapshot`.
 - Override any URL in the plugin's config page. Useful for Bambu printers, which have no HTTP stream: point a [go2rtc](https://github.com/AlexxIT/go2rtc) relay at them and paste its MJPEG URL.
 - Search box and tile-size slider in the tab bar.
