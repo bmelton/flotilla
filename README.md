@@ -36,3 +36,11 @@ The plugin is deliberately a single file so Orca can install it directly. Keep i
 ## License
 
 [MIT](LICENSE.md)
+
+## Releasing
+
+Bump `version` in the header of `src/flotilla.py`, commit, then tag and push. CI runs the tests, checks the tag matches the header, and publishes a GitHub Release with `flotilla.py` attached.
+
+```
+git tag v0.2.0 && git push --tags
+```
