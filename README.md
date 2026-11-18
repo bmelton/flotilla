@@ -2,6 +2,11 @@
 
 OrcaSlicer plugin that adds a **Flotilla** tab: a live camera grid for every printer OrcaSlicer knows about, Watchtower-style. Orca's Device tab only shows the selected printer; this shows all of them.
 
+<img width="1712" height="1104" alt="image" src="https://github.com/user-attachments/assets/14b3812d-c1cf-438e-a3f1-bced8cd792cc" />
+
+<img width="1716" height="1098" alt="image" src="https://github.com/user-attachments/assets/d4e7a3dc-a474-46cd-8cc0-a9a3c594e961" />
+
+
 ## Install
 
 Requires OrcaSlicer 2.5+ (plugin pages).
