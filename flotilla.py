@@ -160,7 +160,7 @@ def _ws_send(s: socket.socket, text: str) -> None:
 
 _SDCP_CMD = {"pause": 129, "cancel": 130, "resume": 131}
 _SDCP_STATE = {0: "standby", 1: "homing", 5: "pausing", 6: "paused", 7: "stopping", 8: "cancelled",
-               9: "complete", 13: "printing", 15: "heating", 16: "printing", 20: "printing"}
+               9: "complete", 13: "printing", 15: "heating", 16: "printing", 20: "resuming"}
 
 
 def summarize_sdcp(status: dict) -> dict:
@@ -180,8 +180,10 @@ def sdcp(host: str, cmd: str) -> dict:
     hostname = base_url(host).split("://", 1)[1].split("/")[0].split(":")[0]
     s = _ws_connect(hostname, 3030, "/websocket")
     try:
-        # The printer pushes a status frame right after connect; it carries the MainboardID.
-        for _ in range(6):
+        # Ask for status (Cmd 0) explicitly: unsolicited pushes can be seconds apart while paused.
+        _ws_send(s, json.dumps({"Id": "", "Data": {"Cmd": 0, "Data": {}, "RequestID": os.urandom(8).hex(),
+                                "MainboardID": "", "TimeStamp": int(time.time() * 1000), "From": 1}}))
+        for _ in range(8):
             msg = json.loads(_ws_recv(s))
             if "Status" in msg:
                 break
@@ -196,7 +198,7 @@ def sdcp(host: str, cmd: str) -> dict:
             r = json.loads(_ws_recv(s))
             if r.get("Data", {}).get("RequestID") == rid:
                 if r["Data"].get("Data", {}).get("Ack", 1) != 0:
-                    raise RuntimeError(f"printer refused ({r['Data']['Data']})")
+                    raise RuntimeError("printer refused; probably already in that state")
                 return {"type": "done", "host": host, "cmd": cmd}
         raise TimeoutError("no SDCP ack")
     finally:
