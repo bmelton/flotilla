@@ -86,6 +86,9 @@ body{margin:0;background:var(--orca-bg,#1b1b1b);color:var(--orca-fg,#eee);font:1
 .tile.dead img{display:none}
 .tile.dead::before{content:'no stream';position:absolute;inset:0;display:grid;place-items:center;color:var(--orca-muted,#888)}
 .tile.hidden{display:none}
+.tile{cursor:zoom-in}
+.tile.full{position:fixed;inset:0;z-index:9;aspect-ratio:auto;border:0;border-radius:0;cursor:zoom-out}
+.tile.full img{object-fit:contain}
 """
 
 _JS = """
@@ -93,6 +96,9 @@ const q=document.getElementById('q'), w=document.getElementById('w');
 q.oninput=()=>{const s=q.value.toLowerCase();for(const t of document.querySelectorAll('.tile'))t.classList.toggle('hidden',!t.dataset.name.includes(s));};
 w.oninput=()=>document.querySelector('.grid').style.setProperty('--w',w.value+'px');
 for(const img of document.querySelectorAll('.tile img')){img.onerror=()=>img.parentElement.classList.add('dead');}
+const unfull=()=>document.querySelectorAll('.tile.full').forEach(t=>t.classList.remove('full'));
+for(const t of document.querySelectorAll('.tile')){t.onclick=()=>{const was=t.classList.contains('full');unfull();if(!was)t.classList.add('full');};}
+document.onkeydown=e=>{if(e.key==='Escape')unfull();};
 """
 
 
