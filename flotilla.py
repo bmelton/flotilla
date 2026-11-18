@@ -19,7 +19,9 @@ import base64
 import html
 import json
 import os
+import platform
 import socket
+import sys
 import struct
 import threading
 import time
@@ -78,9 +80,44 @@ def printers_from_bundle() -> list[dict]:
 
 
 def tiles(printers: list[dict], cfg: dict) -> list[dict]:
+    _names.update({p["print_host"]: p["name"] for p in printers})
     return [{"name": p["name"], "host": p["print_host"],
              "url": (cfg.get(p["name"]) or "").strip() or default_url(p["print_host"], p["host_type"])}
             for p in printers]
+
+
+# --- logging: one JSON-lines file, flotilla.log in the plugin's storage dir -----------
+_LOG_MAX = 2_000_000  # bytes; rotate to flotilla.log.1
+_log_lock = threading.Lock()
+_names: dict[str, str] = {}       # host -> preset name
+_firmware: dict[str, str] = {}    # host -> firmware string, learned on first status
+
+
+def log_path() -> "Path":
+    from pathlib import Path
+    try:
+        d = Path(orca.host.plugin.storage())
+    except Exception:
+        d = Path(__file__).resolve().parent
+    return d / "flotilla.log"
+
+
+def log(event: str, host: str = "", level: str = "info", **fields) -> None:
+    rec = {"ts": time.strftime("%Y-%m-%dT%H:%M:%S%z"), "level": level, "event": event}
+    if host:
+        fn = _proto.get(host)
+        rec.update(printer=_names.get(host, ""), host=host, proto=getattr(fn, "__name__", None),
+                   firmware=_firmware.get(host))
+    rec.update(fields)
+    try:
+        p = log_path()
+        with _log_lock:
+            if p.exists() and p.stat().st_size > _LOG_MAX:
+                p.replace(p.with_suffix(".log.1"))
+            with p.open("a", encoding="utf-8") as f:
+                f.write(json.dumps(rec, default=str) + "\n")
+    except Exception:
+        pass  # logging must never break the plugin
 
 
 # --- Moonraker --------------------------------------------------------------------
@@ -111,6 +148,8 @@ def summarize(result: dict) -> dict:
 def moonraker(host: str, cmd: str) -> dict:
     base = base_url(host)
     if cmd == "status":
+        if host not in _firmware:
+            _firmware[host] = "moonraker " + str(_http(base + "/printer/info")["result"].get("software_version", "?"))
         return {"type": "status", "host": host, "data": summarize(_http(base + _QUERY)["result"])}
     _http(base + _ACTIONS[cmd], "POST")
     return {"type": "done", "host": host, "cmd": cmd}
@@ -190,6 +229,15 @@ def sdcp(host: str, cmd: str) -> dict:
         else:
             raise ConnectionError("no SDCP status frame")
         if cmd == "status":
+            if host not in _firmware:  # Cmd 1 = request attributes; answered in <1s
+                _ws_send(s, json.dumps({"Id": "", "Data": {"Cmd": 1, "Data": {}, "RequestID": os.urandom(8).hex(),
+                                        "MainboardID": msg["MainboardID"], "TimeStamp": int(time.time() * 1000), "From": 1}}))
+                for _ in range(6):
+                    m2 = json.loads(_ws_recv(s))
+                    if "Attributes" in m2:
+                        a = m2["Attributes"]
+                        _firmware[host] = f"{a.get('MachineName', '?')} {a.get('FirmwareVersion', '?')} sdcp {a.get('ProtocolVersion', '?')}"
+                        break
             return {"type": "status", "host": host, "data": summarize_sdcp(msg["Status"])}
         rid = os.urandom(8).hex()
         _ws_send(s, json.dumps({"Id": "", "Data": {"Cmd": _SDCP_CMD[cmd], "Data": {}, "RequestID": rid,
@@ -212,18 +260,25 @@ def control(host: str, cmd: str) -> dict:
     fns = [_proto[host]] if host in _proto else [moonraker, sdcp]
     err: Exception = RuntimeError("no client")
     for fn in fns:
+        t0 = time.time()
         try:
             out = fn(host, cmd)
             _proto[host] = fn
+            log("command" if cmd != "status" else "status", host, cmd=cmd, ms=int((time.time() - t0) * 1000),
+                state=out.get("data", {}).get("state") if cmd == "status" else None)
             return out
         except Exception as e:
             err = e
+            log("command_failed" if cmd != "status" else "status_failed", host, level="warn", cmd=cmd,
+                client=fn.__name__, ms=int((time.time() - t0) * 1000), error=f"{e.__class__.__name__}: {e}")
+    _proto.pop(host, None)  # ponytail: forget the cached client so a rebooted printer gets re-detected
     raise err
 
 
 _CSS = """
 body{margin:0;background:var(--orca-bg,#1b1b1b);color:var(--orca-fg,#eee);font:14px var(--orca-font,system-ui)}
 .bar{display:flex;gap:8px;align-items:center;padding:8px 12px;border-bottom:1px solid var(--orca-border,#333)}
+.bar button{background:transparent;color:inherit;border:1px solid var(--orca-border,#444);border-radius:6px;padding:6px 10px;cursor:pointer}
 .bar input{flex:1;max-width:360px;background:transparent;color:inherit;border:1px solid var(--orca-border,#444);border-radius:6px;padding:6px 10px}
 .grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(var(--w,340px),1fr));gap:12px;padding:12px}
 .tile{position:relative;background:#000;border:1px solid var(--orca-border,#333);border-radius:6px;overflow:hidden;aspect-ratio:4/3}
@@ -247,9 +302,16 @@ body{margin:0;background:var(--orca-bg,#1b1b1b);color:var(--orca-fg,#eee);font:1
 
 _JS = r"""
 const q=document.getElementById('q'), w=document.getElementById('w');
+document.getElementById('log').onclick=()=>orca.postMessage({cmd:'openlog'});
 q.oninput=()=>{const s=q.value.toLowerCase();for(const t of document.querySelectorAll('.tile'))t.classList.toggle('hidden',!t.dataset.name.includes(s));};
 w.oninput=()=>document.querySelector('.grid').style.setProperty('--w',w.value+'px');
-for(const img of document.querySelectorAll('.tile img')){img.onerror=()=>img.parentElement.classList.add('dead');}
+const plog=(t,event,fields)=>orca.postMessage({cmd:'log',host:t.dataset.host,event,fields:fields||{}});
+for(const img of document.querySelectorAll('.tile img')){const t=img.parentElement;img.dataset.src=img.getAttribute('src');
+  img.onerror=()=>{if(!t.classList.contains('dead')){t.classList.add('dead');plog(t,'stream_dead',{url:img.dataset.src});}};
+  img.onload=()=>{if(t.classList.contains('dead')){t.classList.remove('dead');plog(t,'stream_recovered');}};}
+// ponytail: retry dead tiles every 60s. A stream that freezes mid-print without an error isn't detected; click the tile to force a reload.
+setInterval(()=>{for(const t of document.querySelectorAll('.tile.dead')){const img=t.querySelector('img');if(img.dataset.src)img.src=img.dataset.src+(img.dataset.src.includes('?')?'&':'?')+'_r='+Date.now();}},60000);
+window.onerror=(m,src,line)=>orca.postMessage({cmd:'log',event:'js_error',level:'error',fields:{message:String(m),line}});
 const unfull=()=>{document.querySelectorAll('.tile.full').forEach(t=>t.classList.remove('full'));if(typeof watch==='function')watch(null);};
 const fmt=s=>s==null?'?':(s>=3600?Math.floor(s/3600)+'h':'')+Math.floor(s%3600/60)+'m';
 let timer=null, cur=null;
@@ -300,7 +362,8 @@ def page_html(items: list[dict]) -> str:
         body = f"<div class='grid'>{body}</div>"
     return (f"<!doctype html><html><head><meta charset='utf-8'><style>{_CSS}</style></head><body>"
             f"<div class='bar'><input id='q' placeholder='Search printers…'>"
-            f"<input id='w' type='range' min='200' max='800' value='340' style='max-width:160px'></div>"
+            f"<input id='w' type='range' min='200' max='800' value='340' style='max-width:160px'>"
+            f"<button id='log' title='Open flotilla.log'>Log</button></div>"
             f"{body}<script>{_JS}</script></body></html>")
 
 
@@ -339,7 +402,17 @@ if orca is not None:
                 try:
                     return page_html(tiles(printers_from_bundle(), self._cfg()))
                 except Exception as e:  # never take the tab down
+                    log("get_ui_failed", level="error", error=repr(e))
                     return f"<pre style='padding:16px;color:var(--orca-fg)'>Flotilla error: {html.escape(str(e))}</pre>"
+
+            def on_load(self):
+                try:
+                    v = orca.host.preset_bundle  # proves the host module is live
+                    bundle = printers_from_bundle()
+                except Exception:
+                    bundle = []
+                log("plugin_loaded", plugin_version="0.1.0", python=sys.version.split()[0], platform=platform.platform(),
+                    printers=[{"name": p["name"], "host": p["print_host"], "host_type": p["host_type"]} for p in bundle])
 
             def has_config_ui(self):
                 return True
@@ -355,7 +428,14 @@ if orca is not None:
                     msg = json.loads(msg)
                 host, cmd = msg.get("host", ""), msg.get("cmd", "")
                 if cmd == "open":
+                    log("open_browser", host)
                     webbrowser.open(base_url(host))
+                    return
+                if cmd == "openlog":
+                    webbrowser.open(log_path().as_uri())
+                    return
+                if cmd == "log":  # page-side events: stream dead/recovered, js errors
+                    log(msg.get("event", "page"), host, level=msg.get("level", "info"), **msg.get("fields", {}))
                     return
                 def work():
                     try:
@@ -415,4 +495,12 @@ if __name__ == "__main__":
                          "TempOfNozzle": 234.85, "TempTargetNozzle": 235, "TempOfHotbed": 80.1, "TempTargetHotbed": 80})
     assert ss["state"] == "printing" and ss["remaining"] == 7698 and ss["nozzle"] == [235, 235], ss
     assert summarize_sdcp({"PrintInfo": {"Status": 6}})["state"] == "paused"
+    import tempfile, pathlib
+    _d = tempfile.mkdtemp(); _old = log_path
+    log_path = lambda: pathlib.Path(_d) / "flotilla.log"  # noqa: E731
+    _names["h"] = "P"; _firmware["h"] = "fw1"
+    log("status", "h", cmd="status", state="printing"); log("plugin_loaded", python="3")
+    lines = [json.loads(l) for l in log_path().read_text().splitlines()]
+    assert lines[0]["printer"] == "P" and lines[0]["firmware"] == "fw1" and lines[1]["event"] == "plugin_loaded", lines
+    log_path = _old
     print("ok")
