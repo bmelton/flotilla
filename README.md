@@ -21,6 +21,27 @@ Download `src/flotilla.py`, then in OrcaSlicer: Plugins → **Install local plug
 - Camera URL is guessed from `host_type` (`/webcam/?action=stream` for Moonraker and OctoPrint, `:3031/video` for Elegoo, `/webcam/snapshot` for PrusaLink) and can be overridden per printer in the plugin's config page. Bambu printers have no HTTP stream; point a [go2rtc](https://github.com/AlexxIT/go2rtc) relay at them and paste its MJPEG URL.
 - Dead tiles retry on the **Auto-retry** interval in the tab bar (default on, 1 minute).
 
+## Help wanted: try it with your printers
+
+Flotilla has been tested on exactly two printers: a Sovol SV08 (stock Klipper + Moonraker) and an Elegoo Centauri Carbon (Elegoo's SDCP protocol). Everything else is a guess, so the most useful thing you can do is try it and report back, whether it works or not.
+
+What we expect, by printer type:
+
+| Type | Examples | Camera | Status and controls |
+|---|---|---|---|
+| Klipper with Moonraker | Voron, Sovol, Qidi, Creality with Mainsail/Fluidd | Should work | Should work |
+| Klipper-derived with vendor firmware | Elegoo Centauri Carbon, Creality K1/K2, Qidi stock, Snapmaker, Anycubic Kobra | Depends on the vendor | Elegoo works; others unknown |
+| Not Klipper | Bambu Lab, Prusa (PrusaLink), OctoPrint, Flashforge | Bambu: no, their stream is proprietary. Others: unknown | Not implemented |
+
+Bambu Lab is the big open question. Orca has its own Bambu network module and there is an open reimplementation of it; whether either can feed a plugin like this is unknown, and so is whether it should be expected to. If you have Bambu printers and ideas, open an issue.
+
+### How to report
+
+1. Open the Flotilla tab, click the **Log** button, and grab `flotilla.log` (and `flotilla.log.1` if it exists). It lives in `<Orca data dir>/orca_plugins/plugin_data/<plugin id>/`. On macOS the data dir is `~/Library/Application Support/OrcaSlicer`, on Windows `%APPDATA%\OrcaSlicer`, on Linux `~/.config/OrcaSlicer`.
+2. File an issue at https://github.com/bmelton/flotilla/issues with: printer model and firmware version, how Orca connects to it (the preset's host type and whether you use a physical printer), what you saw, and the log attached. Working reports are as welcome as broken ones; they go in the table above.
+
+The log is JSON lines. Each entry names the printer, host, detected protocol, firmware, the command, timing, and any error. It contains your printer hostnames or IPs and nothing else sensitive, but skim it before posting if that matters to you.
+
 ## Troubleshooting
 
 Flotilla writes one JSON-lines log, `flotilla.log`, in its plugin storage folder (`<Orca data dir>/orca_plugins/plugin_data/<plugin id>/`). The **Log** button in the tab bar opens it. Each entry carries the printer name, host, detected protocol, firmware, the command, timing, and the error if any. It rotates to `flotilla.log.1` at 2 MB. Attach both files to a bug report.
