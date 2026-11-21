@@ -437,7 +437,7 @@ if orca is not None:
                     bundle = printers_from_bundle()
                 except Exception:
                     bundle = []
-                log("plugin_loaded", plugin_version="0.2.1", python=sys.version.split()[0], platform=platform.platform(),
+                log("plugin_loaded", plugin_version="0.2.1", python=sys.version.split()[0], platform=f"{sys.platform} {platform.machine()}",
                     printers=[{"name": p["name"], "host": p["print_host"], "host_type": p["host_type"]} for p in bundle])
 
             def has_config_ui(self):
@@ -489,11 +489,12 @@ if orca is not None:
     @orca.plugin
     class FlotillaPlugin(orca.base):
         def register_capabilities(self):
+            # One grant per host (scheme+host) covers every URL, port and raw socket on it, asked once
+            # at load. network_http/network_socket grants are exact-target and re-prompt per URL (#11).
             try:
-                ps = printers_from_bundle()
-                hosts = [base_url(p["print_host"]) for p in ps]
-                socks = [str((base_url(p["print_host"]).split("://", 1)[1].split("/")[0].split(":")[0], 3030)) for p in ps]
-                orca.request_permissions(network_http=hosts, network_socket=socks, threading=True)
-            except Exception:
-                pass  # bundle not ready or older host: first use prompts instead
+                hosts = sorted({base_url(p["print_host"]) for p in printers_from_bundle()})
+                orca.request_permissions(network=hosts, threading=True)
+                print(f"[flotilla] request_permissions network={hosts}")
+            except Exception as e:
+                print(f"[flotilla] request_permissions failed: {e.__class__.__name__}: {e}")  # first use prompts instead
             orca.register_capability(_Capability)
