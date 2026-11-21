@@ -5,7 +5,7 @@
 # name = "Flotilla"
 # description = "Watchtower-style camera grid for every printer OrcaSlicer knows about."
 # author = "Barry Melton"
-# version = "0.2.2"
+# version = "0.2.3"
 # license = "MIT"
 # ///
 """Flotilla tab: one tile per printer host, each an <img> on the printer's MJPEG stream.
@@ -224,19 +224,24 @@ def summarize_sdcp(status: dict) -> dict:
 
 def sdcp_enable_video(host: str) -> None:
     """Elegoo boots with the camera off: :3031/video answers 200 and never sends a frame until
-    SDCP Cmd 386 Enable=1 is sent (#12). Idempotent; called in a thread, never from the UI."""
+    SDCP Cmd 386 Enable=1 is sent (#12). The camera also leaks client slots: after a few reloads
+    :3031/video answers "500 too many client" even with no client connected, and only Enable=0
+    clears them. So always cycle 0 then 1. Called in a thread, never from the UI."""
     t0 = time.time()
     hostname = base_url(host).split("://", 1)[1].split("/")[0].split(":")[0]
     try:
         s = _ws_connect(hostname, 3030, "/websocket")
         try:
-            _ws_send(s, json.dumps({"Id": "", "Data": {"Cmd": 386, "Data": {"Enable": 1}, "RequestID": os.urandom(8).hex(),
-                                    "MainboardID": "", "TimeStamp": int(time.time() * 1000), "From": 1}}))
-            for _ in range(8):
-                msg = json.loads(_ws_recv(s))
-                if msg.get("Data", {}).get("Cmd") == 386:
-                    log("video_enabled", host, ms=int((time.time() - t0) * 1000), ack=msg["Data"].get("Data", {}).get("Ack"))
-                    return
+            for enable in (0, 1):
+                _ws_send(s, json.dumps({"Id": "", "Data": {"Cmd": 386, "Data": {"Enable": enable}, "RequestID": os.urandom(8).hex(),
+                                        "MainboardID": "", "TimeStamp": int(time.time() * 1000), "From": 1}}))
+                for _ in range(8):
+                    msg = json.loads(_ws_recv(s))
+                    if msg.get("Data", {}).get("Cmd") == 386:
+                        break
+                else:
+                    raise ConnectionError("no SDCP ack for video Enable=%d" % enable)
+            log("video_enabled", host, ms=int((time.time() - t0) * 1000), ack=msg["Data"].get("Data", {}).get("Ack"))
         finally:
             s.close()
     except Exception as e:
@@ -466,7 +471,7 @@ if orca is not None:
                     bundle = printers_from_bundle()
                 except Exception:
                     bundle = []
-                log("plugin_loaded", plugin_version="0.2.2", python=sys.version.split()[0], platform=f"{sys.platform} {platform.machine()}",
+                log("plugin_loaded", plugin_version="0.2.3", python=sys.version.split()[0], platform=f"{sys.platform} {platform.machine()}",
                     printers=[{"name": p["name"], "host": p["print_host"], "host_type": p["host_type"]} for p in bundle])
 
             def has_config_ui(self):

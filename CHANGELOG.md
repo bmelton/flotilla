@@ -1,5 +1,8 @@
 # Changelog
 
+## 0.2.3
+- Elegoo: cycle video Enable=0 then 1 over SDCP; the camera leaks client slots and answers "500 too many client" until it is disabled once
+
 ## 0.2.2
 - Elegoo: enable the camera over SDCP at page load and whenever its tile dies; the Centauri Carbon boots with video off (#12)
 - Request one network grant per printer host at load instead of re-prompting per URL after a printer reboot (#11)
