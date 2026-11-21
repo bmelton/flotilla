@@ -222,6 +222,31 @@ def summarize_sdcp(status: dict) -> dict:
             "bed": [round(status.get("TempOfHotbed", 0)), round(status.get("TempTargetHotbed", 0))]}
 
 
+def sdcp_enable_video(host: str) -> None:
+    """Elegoo boots with the camera off: :3031/video answers 200 and never sends a frame until
+    SDCP Cmd 386 Enable=1 is sent (#12). Idempotent; called in a thread, never from the UI."""
+    t0 = time.time()
+    hostname = base_url(host).split("://", 1)[1].split("/")[0].split(":")[0]
+    try:
+        s = _ws_connect(hostname, 3030, "/websocket")
+        try:
+            _ws_send(s, json.dumps({"Id": "", "Data": {"Cmd": 386, "Data": {"Enable": 1}, "RequestID": os.urandom(8).hex(),
+                                    "MainboardID": "", "TimeStamp": int(time.time() * 1000), "From": 1}}))
+            for _ in range(8):
+                msg = json.loads(_ws_recv(s))
+                if msg.get("Data", {}).get("Cmd") == 386:
+                    log("video_enabled", host, ms=int((time.time() - t0) * 1000), ack=msg["Data"].get("Data", {}).get("Ack"))
+                    return
+        finally:
+            s.close()
+    except Exception as e:
+        log("video_enable_failed", host, level="warn", ms=int((time.time() - t0) * 1000), error=f"{e.__class__.__name__}: {e}")
+
+
+def is_elegoo_stream(url: str) -> bool:
+    return ":3031/video" in (url or "")
+
+
 def sdcp(host: str, cmd: str) -> dict:
     if cmd == "estop":
         raise ValueError("Elegoo SDCP has no emergency stop; use Cancel")
@@ -426,7 +451,11 @@ if orca is not None:
 
             def get_ui(self):
                 try:
-                    return page_html(tiles(printers_from_bundle(), self._cfg()))
+                    ts = tiles(printers_from_bundle(), self._cfg())
+                    for t in ts:
+                        if is_elegoo_stream(t["url"]):
+                            threading.Thread(target=sdcp_enable_video, args=(t["host"],), daemon=True).start()
+                    return page_html(ts)
                 except Exception as e:  # never take the tab down
                     log("get_ui_failed", level="error", error=repr(e))
                     return f"<pre style='padding:16px;color:var(--orca-fg)'>Flotilla error: {html.escape(str(e))}</pre>"
@@ -462,6 +491,8 @@ if orca is not None:
                     return
                 if cmd == "log":  # page-side events: stream dead/recovered, js errors
                     log(msg.get("event", "page"), host, level=msg.get("level", "info"), **msg.get("fields", {}))
+                    if msg.get("event") == "stream_dead" and is_elegoo_stream(msg.get("fields", {}).get("url")):
+                        threading.Thread(target=sdcp_enable_video, args=(host,), daemon=True).start()
                     return
                 def work():
                     try:

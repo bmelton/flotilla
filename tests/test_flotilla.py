@@ -23,6 +23,8 @@ class Urls(unittest.TestCase):
         self.assertEqual(urls[0], "http://u1.lan/webcam/?action=stream")
         self.assertIn("http://u1.lan/webcam/stream.mjpg", urls)  # Snapmaker U1 mod (#5)
         self.assertEqual(f.candidate_urls("cc.lan", "elegoolink"), ["http://cc.lan:3031/video"])
+        self.assertTrue(f.is_elegoo_stream(f.default_url("cc.lan", "ElegooLink")))
+        self.assertFalse(f.is_elegoo_stream("http://u1.lan/webcam/stream.mjpg") or f.is_elegoo_stream(None))
         t = f.tiles([{"name": "U1", "print_host": "u1.lan", "host_type": "moonraker"},
                      {"name": "Q2", "print_host": "b", "host_type": ""}], {"Q2": "http://relay/x"})
         self.assertEqual(t[0]["alts"], urls[1:])
