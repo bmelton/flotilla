@@ -324,7 +324,8 @@ for(const img of document.querySelectorAll('.tile img')){const t=img.parentEleme
   img.onload=()=>{img.dataset.live='1';if(t.classList.contains('dead')){t.classList.remove('dead');plog(t,'stream_recovered');}};}
 // Dead tiles retry on the user interval. Live tiles re-request every REFRESH_MS (#6): WebKit never fires error on an MJPEG stream that stalls with the socket open, and it grows memory on long streams. Click a tile to reload it.
 // A URL that has delivered a frame is marked live and never falls back to the next alt; a later error marks the tile dead and retries the same URL.
-const reload=img=>{if(img.dataset.src)img.src=img.dataset.src+(img.dataset.src.includes('?')?'&':'?')+'_r='+Date.now();};
+// Clear src first so WebKit closes the old stream before opening the new one; some cameras (Elegoo, #10) allow very few clients.
+const reload=img=>{if(!img.dataset.src)return;img.src='';setTimeout(()=>{img.src=img.dataset.src+(img.dataset.src.includes('?')?'&':'?')+'_r='+Date.now();},0);};
 const REFRESH_MS=15*60*1000;
 function refreshLive(){for(const t of document.querySelectorAll('.tile:not(.dead)')){const img=t.querySelector('img');img.dataset.live='1';reload(img);}}
 setInterval(refreshLive,REFRESH_MS);
