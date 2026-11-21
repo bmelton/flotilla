@@ -19,7 +19,8 @@ Download `src/flotilla.py`, then in OrcaSlicer: Plugins → **Install local plug
 - Click a tile to fill the tab. The HUD shows state, file, progress, time, and temperatures, with Pause/Resume, Cancel, E-Stop (each behind a confirm), and Open in browser.
 - Supported control protocols, auto-detected per host: **Moonraker** (Klipper: Sovol, Qidi, Mainsail/Fluidd setups) and **Elegoo SDCP** (Centauri Carbon). Others get camera only.
 - Camera URL is guessed from `host_type` (`/webcam/?action=stream` for Moonraker and OctoPrint, `:3031/video` for Elegoo, `/webcam/snapshot` for PrusaLink) and can be overridden per printer in the plugin's config page. Bambu printers have no HTTP stream; point a [go2rtc](https://github.com/AlexxIT/go2rtc) relay at them and paste its MJPEG URL.
-- Dead tiles retry on the **Auto-retry** interval in the tab bar (default on, 1 minute).
+- Dead tiles retry on the **Auto-retry** interval in the tab bar (default on, 1 minute). Keep it at 1 minute or more for Elegoo printers: the Centauri Carbon camera allows only a few viewers and answers `too many client` when saturated, so hammering it every second does not help.
+- Live tiles re-request their stream every 15 minutes, and clicking a tile reloads it. Both close the old connection before opening the new one.
 
 ## Help wanted: try it with your printers
 

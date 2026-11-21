@@ -5,7 +5,7 @@
 # name = "Flotilla"
 # description = "Watchtower-style camera grid for every printer OrcaSlicer knows about."
 # author = "Barry Melton"
-# version = "0.2.0"
+# version = "0.2.2"
 # license = "MIT"
 # ///
 """Flotilla tab: one tile per printer host, each an <img> on the printer's MJPEG stream.
@@ -222,6 +222,31 @@ def summarize_sdcp(status: dict) -> dict:
             "bed": [round(status.get("TempOfHotbed", 0)), round(status.get("TempTargetHotbed", 0))]}
 
 
+def sdcp_enable_video(host: str) -> None:
+    """Elegoo boots with the camera off: :3031/video answers 200 and never sends a frame until
+    SDCP Cmd 386 Enable=1 is sent (#12). Idempotent; called in a thread, never from the UI."""
+    t0 = time.time()
+    hostname = base_url(host).split("://", 1)[1].split("/")[0].split(":")[0]
+    try:
+        s = _ws_connect(hostname, 3030, "/websocket")
+        try:
+            _ws_send(s, json.dumps({"Id": "", "Data": {"Cmd": 386, "Data": {"Enable": 1}, "RequestID": os.urandom(8).hex(),
+                                    "MainboardID": "", "TimeStamp": int(time.time() * 1000), "From": 1}}))
+            for _ in range(8):
+                msg = json.loads(_ws_recv(s))
+                if msg.get("Data", {}).get("Cmd") == 386:
+                    log("video_enabled", host, ms=int((time.time() - t0) * 1000), ack=msg["Data"].get("Data", {}).get("Ack"))
+                    return
+        finally:
+            s.close()
+    except Exception as e:
+        log("video_enable_failed", host, level="warn", ms=int((time.time() - t0) * 1000), error=f"{e.__class__.__name__}: {e}")
+
+
+def is_elegoo_stream(url: str) -> bool:
+    return ":3031/video" in (url or "")
+
+
 def sdcp(host: str, cmd: str) -> dict:
     if cmd == "estop":
         raise ValueError("Elegoo SDCP has no emergency stop; use Cancel")
@@ -319,13 +344,19 @@ w.oninput=()=>document.querySelector('.grid').style.setProperty('--w',w.value+'p
 const plog=(t,event,fields)=>orca.postMessage({cmd:'log',host:t.dataset.host,event,fields:fields||{}});
 for(const img of document.querySelectorAll('.tile img')){const t=img.parentElement;img.dataset.src=img.getAttribute('src');
   const alts=JSON.parse(img.dataset.alts||'[]');
-  img.onerror=()=>{if(alts.length){const next=alts.shift();plog(t,'stream_fallback',{from:img.dataset.src,to:next});img.dataset.src=next;img.src=next;return;}
+  img.onerror=()=>{if(alts.length&&!img.dataset.live){const next=alts.shift();plog(t,'stream_fallback',{from:img.dataset.src,to:next});img.dataset.src=next;img.src=next;return;}
     if(!t.classList.contains('dead')){t.classList.add('dead');plog(t,'stream_dead',{url:img.dataset.src});}};
-  img.onload=()=>{if(t.classList.contains('dead')){t.classList.remove('dead');plog(t,'stream_recovered');}};}
-// ponytail: retry dead tiles every 60s. A stream that freezes mid-print without an error isn't detected; click the tile to force a reload.
+  img.onload=()=>{img.dataset.live='1';if(t.classList.contains('dead')){t.classList.remove('dead');plog(t,'stream_recovered');}};}
+// Dead tiles retry on the user interval. Live tiles re-request every REFRESH_MS (#6): WebKit never fires error on an MJPEG stream that stalls with the socket open, and it grows memory on long streams. Click a tile to reload it.
+// A URL that has delivered a frame is marked live and never falls back to the next alt; a later error marks the tile dead and retries the same URL.
+// Clear src first so WebKit closes the old stream before opening the new one; some cameras (Elegoo, #10) allow very few clients.
+const reload=img=>{if(!img.dataset.src)return;img.src='';setTimeout(()=>{img.src=img.dataset.src+(img.dataset.src.includes('?')?'&':'?')+'_r='+Date.now();},0);};
+const REFRESH_MS=15*60*1000;
+function refreshLive(){for(const t of document.querySelectorAll('.tile:not(.dead)')){const img=t.querySelector('img');img.dataset.live='1';reload(img);}}
+setInterval(refreshLive,REFRESH_MS);
 const ar=document.getElementById('ar'), ai=document.getElementById('ai'); let retryTimer=null;
 try{const sv=JSON.parse(localStorage.getItem('retry')||'{}');if('on'in sv)ar.checked=sv.on;if(sv.s)ai.value=String(sv.s);}catch(e){}
-function retryDead(){for(const t of document.querySelectorAll('.tile.dead')){const img=t.querySelector('img');if(img.dataset.src)img.src=img.dataset.src+(img.dataset.src.includes('?')?'&':'?')+'_r='+Date.now();}}
+function retryDead(){for(const t of document.querySelectorAll('.tile.dead'))reload(t.querySelector('img'));}
 function schedule(){clearInterval(retryTimer);ai.disabled=!ar.checked;if(ar.checked)retryTimer=setInterval(retryDead,ai.value*1000);try{localStorage.setItem('retry',JSON.stringify({on:ar.checked,s:+ai.value}));}catch(e){}}
 ar.onchange=ai.onchange=schedule; schedule();
 window.onerror=(m,src,line)=>orca.postMessage({cmd:'log',event:'js_error',level:'error',fields:{message:String(m),line}});
@@ -335,7 +366,7 @@ let timer=null, cur=null;
 const send=m=>orca.postMessage(m);
 function poll(){if(cur)send({cmd:'status',host:cur.dataset.host});}
 function watch(t){cur=t;clearInterval(timer);if(t){poll();timer=setInterval(poll,3000);}}
-for(const t of document.querySelectorAll('.tile')){t.onclick=e=>{if(e.target.closest('.hud'))return;if(t.querySelector('.hud').dataset.state==='confirm'){disarm(t);return;}const was=t.classList.contains('full');unfull();if(!was){t.classList.add('full');watch(t);}else watch(null);};}
+for(const t of document.querySelectorAll('.tile')){t.onclick=e=>{if(e.target.closest('.hud'))return;if(t.querySelector('.hud').dataset.state==='confirm'){disarm(t);return;}const was=t.classList.contains('full');unfull();if(!was){t.classList.add('full');reload(t.querySelector('img'));watch(t);}else watch(null);};}
 const QUESTION={pause:['Pause this print?','Yes, pause'],resume:['Resume this print?','Yes, resume'],cancel:['Cancel this print?','Yes, cancel'],estop:['Emergency stop?','Yes, stop']};
 function disarm(t){const h=t.querySelector('.hud');clearTimeout(h._t);h.dataset.state='idle';h.querySelector('.confirm').hidden=true;h.querySelector('.actions').hidden=false;}
 function arm(t,cmd){const h=t.querySelector('.hud');disarm(t);h.dataset.state='confirm';const [q,y]=QUESTION[cmd];
@@ -420,7 +451,11 @@ if orca is not None:
 
             def get_ui(self):
                 try:
-                    return page_html(tiles(printers_from_bundle(), self._cfg()))
+                    ts = tiles(printers_from_bundle(), self._cfg())
+                    for t in ts:
+                        if is_elegoo_stream(t["url"]):
+                            threading.Thread(target=sdcp_enable_video, args=(t["host"],), daemon=True).start()
+                    return page_html(ts)
                 except Exception as e:  # never take the tab down
                     log("get_ui_failed", level="error", error=repr(e))
                     return f"<pre style='padding:16px;color:var(--orca-fg)'>Flotilla error: {html.escape(str(e))}</pre>"
@@ -431,7 +466,7 @@ if orca is not None:
                     bundle = printers_from_bundle()
                 except Exception:
                     bundle = []
-                log("plugin_loaded", plugin_version="0.2.0", python=sys.version.split()[0], platform=platform.platform(),
+                log("plugin_loaded", plugin_version="0.2.2", python=sys.version.split()[0], platform=f"{sys.platform} {platform.machine()}",
                     printers=[{"name": p["name"], "host": p["print_host"], "host_type": p["host_type"]} for p in bundle])
 
             def has_config_ui(self):
@@ -456,6 +491,8 @@ if orca is not None:
                     return
                 if cmd == "log":  # page-side events: stream dead/recovered, js errors
                     log(msg.get("event", "page"), host, level=msg.get("level", "info"), **msg.get("fields", {}))
+                    if msg.get("event") == "stream_dead" and is_elegoo_stream(msg.get("fields", {}).get("url")):
+                        threading.Thread(target=sdcp_enable_video, args=(host,), daemon=True).start()
                     return
                 def work():
                     try:
@@ -483,11 +520,12 @@ if orca is not None:
     @orca.plugin
     class FlotillaPlugin(orca.base):
         def register_capabilities(self):
+            # One grant per host (scheme+host) covers every URL, port and raw socket on it, asked once
+            # at load. network_http/network_socket grants are exact-target and re-prompt per URL (#11).
             try:
-                ps = printers_from_bundle()
-                hosts = [base_url(p["print_host"]) for p in ps]
-                socks = [str((base_url(p["print_host"]).split("://", 1)[1].split("/")[0].split(":")[0], 3030)) for p in ps]
-                orca.request_permissions(network_http=hosts, network_socket=socks, threading=True)
-            except Exception:
-                pass  # bundle not ready or older host: first use prompts instead
+                hosts = sorted({base_url(p["print_host"]) for p in printers_from_bundle()})
+                orca.request_permissions(network=hosts, threading=True)
+                print(f"[flotilla] request_permissions network={hosts}")
+            except Exception as e:
+                print(f"[flotilla] request_permissions failed: {e.__class__.__name__}: {e}")  # first use prompts instead
             orca.register_capability(_Capability)
