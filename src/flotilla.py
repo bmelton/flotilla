@@ -5,7 +5,7 @@
 # name = "Flotilla"
 # description = "Watchtower-style camera grid for every printer OrcaSlicer knows about."
 # author = "Barry Melton"
-# version = "0.1.0"
+# version = "0.2.0"
 # license = "MIT"
 # ///
 """Flotilla tab: one tile per printer host, each an <img> on the printer's MJPEG stream.
@@ -36,10 +36,13 @@ except ImportError:  # running outside OrcaSlicer (self-check)
 # ponytail: Bambu printers have no HTTP stream (proprietary TLS tunnel); they get a placeholder.
 # Point a go2rtc/mediamtx relay at them and paste its MJPEG URL in config if you want tiles.
 _STREAM_PATH = {
-    "elegoolink": ":3031/video",  # Elegoo Centauri Carbon
-    "prusalink": "/webcam/snapshot",
+    "elegoolink": [":3031/video"],  # Elegoo Centauri Carbon
+    "prusalink": ["/webcam/snapshot"],
 }
-_DEFAULT_PATH = "/webcam/?action=stream"  # moonraker, fluidd, mainsail, octoprint, qidi
+# ponytail: ordered guesses, tried client-side on <img> error. First is the placeholder default.
+# stream.mjpg = Snapmaker U1 Moonraker mod (#5); :8080 = bare crowsnest/ustreamer with no nginx proxy.
+# Upgrade path: ask moonraker /server/webcams/list for the real stream_url.
+_DEFAULT_PATH = ["/webcam/?action=stream", "/webcam/stream.mjpg", ":8080/?action=stream"]
 
 
 def base_url(print_host: str) -> str:
@@ -47,10 +50,14 @@ def base_url(print_host: str) -> str:
     return h if "://" in h else f"http://{h}"
 
 
-def default_url(print_host: str, host_type: str) -> str:
+def candidate_urls(print_host: str, host_type: str) -> list[str]:
     if not print_host:
-        return ""
-    return base_url(print_host) + _STREAM_PATH.get((host_type or "").lower(), _DEFAULT_PATH)
+        return []
+    return [base_url(print_host) + path for path in _STREAM_PATH.get((host_type or "").lower(), _DEFAULT_PATH)]
+
+
+def default_url(print_host: str, host_type: str) -> str:
+    return (candidate_urls(print_host, host_type) or [""])[0]
 
 
 def dedupe(presets: list[dict]) -> list[dict]:
@@ -81,9 +88,11 @@ def printers_from_bundle() -> list[dict]:
 
 def tiles(printers: list[dict], cfg: dict) -> list[dict]:
     _names.update({p["print_host"]: p["name"] for p in printers})
-    return [{"name": p["name"], "host": p["print_host"],
-             "url": (cfg.get(p["name"]) or "").strip() or default_url(p["print_host"], p["host_type"])}
-            for p in printers]
+    out = []
+    for p in printers:
+        urls = [u] if (u := (cfg.get(p["name"]) or "").strip()) else candidate_urls(p["print_host"], p["host_type"])
+        out.append({"name": p["name"], "host": p["print_host"], "url": urls[0] if urls else "", "alts": urls[1:]})
+    return out
 
 
 # --- logging: one JSON-lines file, flotilla.log in the plugin's storage dir -----------
@@ -309,7 +318,9 @@ q.oninput=()=>{const s=q.value.toLowerCase();for(const t of document.querySelect
 w.oninput=()=>document.querySelector('.grid').style.setProperty('--w',w.value+'px');
 const plog=(t,event,fields)=>orca.postMessage({cmd:'log',host:t.dataset.host,event,fields:fields||{}});
 for(const img of document.querySelectorAll('.tile img')){const t=img.parentElement;img.dataset.src=img.getAttribute('src');
-  img.onerror=()=>{if(!t.classList.contains('dead')){t.classList.add('dead');plog(t,'stream_dead',{url:img.dataset.src});}};
+  const alts=JSON.parse(img.dataset.alts||'[]');
+  img.onerror=()=>{if(alts.length){const next=alts.shift();plog(t,'stream_fallback',{from:img.dataset.src,to:next});img.dataset.src=next;img.src=next;return;}
+    if(!t.classList.contains('dead')){t.classList.add('dead');plog(t,'stream_dead',{url:img.dataset.src});}};
   img.onload=()=>{if(t.classList.contains('dead')){t.classList.remove('dead');plog(t,'stream_recovered');}};}
 // ponytail: retry dead tiles every 60s. A stream that freezes mid-print without an error isn't detected; click the tile to force a reload.
 const ar=document.getElementById('ar'), ai=document.getElementById('ai'); let retryTimer=null;
@@ -359,7 +370,7 @@ def page_html(items: list[dict]) -> str:
     else:
         body = "".join(
             f"<div class='tile{'' if t['url'] else ' dead'}' data-name='{html.escape(t['name'].lower())}' data-host='{html.escape(t['host'])}'>"
-            f"<img src='{html.escape(t['url'])}' alt=''><div class='cap'>{html.escape(t['name'])}</div>"
+            f"<img src='{html.escape(t['url'])}' data-alts='{html.escape(json.dumps(t.get('alts', [])))}' alt=''><div class='cap'>{html.escape(t['name'])}</div>"
             f"<div class='hud' data-state='idle'><span class='st'>{html.escape(t['name'])} · connecting…</span>"
             f"<div class='row actions'><button data-cmd='pause' data-confirm='1' disabled>⏸ Pause</button><button data-cmd='cancel' data-confirm='1' disabled>⏹ Cancel</button>"
             f"<button class='estop' data-cmd='estop' data-confirm='1'>⚠ E-Stop</button><button data-cmd='open'>↗ Open in browser</button></div>"
@@ -420,7 +431,7 @@ if orca is not None:
                     bundle = printers_from_bundle()
                 except Exception:
                     bundle = []
-                log("plugin_loaded", plugin_version="0.1.0", python=sys.version.split()[0], platform=platform.platform(),
+                log("plugin_loaded", plugin_version="0.2.0", python=sys.version.split()[0], platform=platform.platform(),
                     printers=[{"name": p["name"], "host": p["print_host"], "host_type": p["host_type"]} for p in bundle])
 
             def has_config_ui(self):

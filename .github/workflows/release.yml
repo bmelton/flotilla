@@ -16,7 +16,8 @@ jobs:
         run: |
           v=$(sed -n 's/^# version = "\(.*\)"/\1/p' src/flotilla.py)
           [ "v$v" = "${GITHUB_REF_NAME}" ] || { echo "header says $v, tag is ${GITHUB_REF_NAME}"; exit 1; }
+      - run: cp src/flotilla.py "flotilla-${GITHUB_REF_NAME#v}_any.py"  # Orca Cloud wants an OS suffix; "any" = universal
       - uses: softprops/action-gh-release@v2
         with:
-          files: src/flotilla.py
+          files: flotilla-*_any.py
           generate_release_notes: true
