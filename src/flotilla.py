@@ -5,7 +5,7 @@
 # name = "Flotilla"
 # description = "Watchtower-style camera grid for every printer OrcaSlicer knows about."
 # author = "Barry Melton"
-# version = "0.2.1"
+# version = "0.2.2"
 # license = "MIT"
 # ///
 """Flotilla tab: one tile per printer host, each an <img> on the printer's MJPEG stream.
@@ -466,7 +466,7 @@ if orca is not None:
                     bundle = printers_from_bundle()
                 except Exception:
                     bundle = []
-                log("plugin_loaded", plugin_version="0.2.1", python=sys.version.split()[0], platform=f"{sys.platform} {platform.machine()}",
+                log("plugin_loaded", plugin_version="0.2.2", python=sys.version.split()[0], platform=f"{sys.platform} {platform.machine()}",
                     printers=[{"name": p["name"], "host": p["print_host"], "host_type": p["host_type"]} for p in bundle])
 
             def has_config_ui(self):
