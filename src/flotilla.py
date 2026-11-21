@@ -5,7 +5,7 @@
 # name = "Flotilla"
 # description = "Watchtower-style camera grid for every printer OrcaSlicer knows about."
 # author = "Barry Melton"
-# version = "0.2.0"
+# version = "0.2.1"
 # license = "MIT"
 # ///
 """Flotilla tab: one tile per printer host, each an <img> on the printer's MJPEG stream.
@@ -319,13 +319,18 @@ w.oninput=()=>document.querySelector('.grid').style.setProperty('--w',w.value+'p
 const plog=(t,event,fields)=>orca.postMessage({cmd:'log',host:t.dataset.host,event,fields:fields||{}});
 for(const img of document.querySelectorAll('.tile img')){const t=img.parentElement;img.dataset.src=img.getAttribute('src');
   const alts=JSON.parse(img.dataset.alts||'[]');
-  img.onerror=()=>{if(alts.length){const next=alts.shift();plog(t,'stream_fallback',{from:img.dataset.src,to:next});img.dataset.src=next;img.src=next;return;}
+  img.onerror=()=>{if(alts.length&&!img.dataset.live){const next=alts.shift();plog(t,'stream_fallback',{from:img.dataset.src,to:next});img.dataset.src=next;img.src=next;return;}
     if(!t.classList.contains('dead')){t.classList.add('dead');plog(t,'stream_dead',{url:img.dataset.src});}};
-  img.onload=()=>{if(t.classList.contains('dead')){t.classList.remove('dead');plog(t,'stream_recovered');}};}
-// ponytail: retry dead tiles every 60s. A stream that freezes mid-print without an error isn't detected; click the tile to force a reload.
+  img.onload=()=>{img.dataset.live='1';if(t.classList.contains('dead')){t.classList.remove('dead');plog(t,'stream_recovered');}};}
+// Dead tiles retry on the user interval. Live tiles re-request every REFRESH_MS (#6): WebKit never fires error on an MJPEG stream that stalls with the socket open, and it grows memory on long streams. Click a tile to reload it.
+// A URL that has delivered a frame is marked live and never falls back to the next alt; a later error marks the tile dead and retries the same URL.
+const reload=img=>{if(img.dataset.src)img.src=img.dataset.src+(img.dataset.src.includes('?')?'&':'?')+'_r='+Date.now();};
+const REFRESH_MS=15*60*1000;
+function refreshLive(){for(const t of document.querySelectorAll('.tile:not(.dead)')){const img=t.querySelector('img');img.dataset.live='1';reload(img);}}
+setInterval(refreshLive,REFRESH_MS);
 const ar=document.getElementById('ar'), ai=document.getElementById('ai'); let retryTimer=null;
 try{const sv=JSON.parse(localStorage.getItem('retry')||'{}');if('on'in sv)ar.checked=sv.on;if(sv.s)ai.value=String(sv.s);}catch(e){}
-function retryDead(){for(const t of document.querySelectorAll('.tile.dead')){const img=t.querySelector('img');if(img.dataset.src)img.src=img.dataset.src+(img.dataset.src.includes('?')?'&':'?')+'_r='+Date.now();}}
+function retryDead(){for(const t of document.querySelectorAll('.tile.dead'))reload(t.querySelector('img'));}
 function schedule(){clearInterval(retryTimer);ai.disabled=!ar.checked;if(ar.checked)retryTimer=setInterval(retryDead,ai.value*1000);try{localStorage.setItem('retry',JSON.stringify({on:ar.checked,s:+ai.value}));}catch(e){}}
 ar.onchange=ai.onchange=schedule; schedule();
 window.onerror=(m,src,line)=>orca.postMessage({cmd:'log',event:'js_error',level:'error',fields:{message:String(m),line}});
@@ -335,7 +340,7 @@ let timer=null, cur=null;
 const send=m=>orca.postMessage(m);
 function poll(){if(cur)send({cmd:'status',host:cur.dataset.host});}
 function watch(t){cur=t;clearInterval(timer);if(t){poll();timer=setInterval(poll,3000);}}
-for(const t of document.querySelectorAll('.tile')){t.onclick=e=>{if(e.target.closest('.hud'))return;if(t.querySelector('.hud').dataset.state==='confirm'){disarm(t);return;}const was=t.classList.contains('full');unfull();if(!was){t.classList.add('full');watch(t);}else watch(null);};}
+for(const t of document.querySelectorAll('.tile')){t.onclick=e=>{if(e.target.closest('.hud'))return;if(t.querySelector('.hud').dataset.state==='confirm'){disarm(t);return;}const was=t.classList.contains('full');unfull();if(!was){t.classList.add('full');reload(t.querySelector('img'));watch(t);}else watch(null);};}
 const QUESTION={pause:['Pause this print?','Yes, pause'],resume:['Resume this print?','Yes, resume'],cancel:['Cancel this print?','Yes, cancel'],estop:['Emergency stop?','Yes, stop']};
 function disarm(t){const h=t.querySelector('.hud');clearTimeout(h._t);h.dataset.state='idle';h.querySelector('.confirm').hidden=true;h.querySelector('.actions').hidden=false;}
 function arm(t,cmd){const h=t.querySelector('.hud');disarm(t);h.dataset.state='confirm';const [q,y]=QUESTION[cmd];
@@ -431,7 +436,7 @@ if orca is not None:
                     bundle = printers_from_bundle()
                 except Exception:
                     bundle = []
-                log("plugin_loaded", plugin_version="0.2.0", python=sys.version.split()[0], platform=platform.platform(),
+                log("plugin_loaded", plugin_version="0.2.1", python=sys.version.split()[0], platform=platform.platform(),
                     printers=[{"name": p["name"], "host": p["print_host"], "host_type": p["host_type"]} for p in bundle])
 
             def has_config_ui(self):
