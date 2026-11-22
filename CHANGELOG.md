@@ -1,17 +1,11 @@
 # Changelog
 
-## 0.2.7
-- Idle-printer snapshots are taken by Python (one JPEG, clean close) and pushed to the canvas; the <img> snapshot path left half-open sockets the Elegoo counted as clients
-- Once fetch is known to be refused, tiles stop probing it; unhandled JS rejections are logged
-
-## 0.2.6
-- Snapshot tiles on the <img> path went black: the frame is now copied to the canvas before the stream is closed
-- Log why fetch was refused (stream_mode.error); Elegoo video is only cycled before a live reload, not before every snapshot
-
-## 0.2.5
-- Draw MJPEG frames on a canvas via fetch instead of a multipart <img>; WebKit's <img> loader leaks a Mach port per frame until macOS kills the tab (#9). Falls back to <img> if the fetch is refused
-- Idle printers show one snapshot every 10s instead of a live stream; every tile is status-polled every 10s
-- Tiles scrolled out of view, filtered out, or on a hidden tab stop streaming (#7)
+## 0.3.0
+Rendering rewrite. 0.2.5 to 0.2.7 were unreleased steps toward this.
+- Idle printers no longer hold a video stream: Python takes one JPEG snapshot every 10s and the page draws it on a canvas. Every tile is status-polled every 10s to tell idle from printing (#7)
+- Tiles scrolled out of view, filtered out, or on a hidden Orca tab stop streaming
+- Live tiles try fetch-and-canvas first and fall back to the multipart <img> that Orca's web view currently requires; WebKit's <img> loader leaks a Mach port per frame until macOS kills the tab (#9), so limiting it to printers mid-print is what keeps the tab alive overnight
+- Elegoo: video is cycled before a live reload only; unhandled JS rejections and the fetch refusal reason are logged
 
 ## 0.2.4
 - Elegoo: cycle the camera before each tile reload and wait 2s, so the 15-minute refresh no longer kills the tile for up to a minute
