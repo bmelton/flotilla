@@ -5,7 +5,7 @@
 # name = "Flotilla"
 # description = "Watchtower-style camera grid for every printer OrcaSlicer knows about."
 # author = "Barry Melton"
-# version = "0.2.3"
+# version = "0.2.5"
 # license = "MIT"
 # ///
 """Flotilla tab: one tile per printer host, each an <img> on the printer's MJPEG stream.
@@ -323,14 +323,15 @@ body{margin:0;background:var(--orca-bg,#1b1b1b);color:var(--orca-fg,#eee);font:1
 .bar input{flex:1;max-width:360px;background:transparent;color:inherit;border:1px solid var(--orca-border,#444);border-radius:6px;padding:6px 10px}
 .grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(var(--w,340px),1fr));gap:12px;padding:12px}
 .tile{position:relative;background:#000;border:1px solid var(--orca-border,#333);border-radius:6px;overflow:hidden;aspect-ratio:4/3}
-.tile img{width:100%;height:100%;object-fit:cover;display:block}
+.tile img,.tile canvas{width:100%;height:100%;object-fit:cover;display:block}
+.tile[data-mode=img] canvas,.tile:not([data-mode=img]) img,.tile.dead canvas{display:none}
 .tile .cap{position:absolute;left:0;right:0;bottom:0;padding:6px;text-align:center;background:rgba(0,0,0,.55);color:#fff}
 .tile.dead img{display:none}
 .tile.dead::before{content:'no stream';position:absolute;inset:0;display:grid;place-items:center;color:var(--orca-muted,#888)}
 .tile.hidden{display:none}
 .tile{cursor:zoom-in}
 .tile.full{position:fixed;inset:0;z-index:9;aspect-ratio:auto;border:0;border-radius:0;cursor:zoom-out}
-.tile.full img{object-fit:contain}
+.tile.full img,.tile.full canvas{object-fit:contain}
 .hud{display:none;position:absolute;left:0;right:0;bottom:0;padding:10px 14px;background:rgba(0,0,0,.7);color:#fff;cursor:default}
 .tile.full .hud{display:flex;gap:10px;align-items:center;flex-wrap:wrap} .tile.full .cap{display:none}
 .hud .st{flex:1;min-width:200px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
@@ -344,34 +345,86 @@ body{margin:0;background:var(--orca-bg,#1b1b1b);color:var(--orca-fg,#eee);font:1
 _JS = r"""
 const q=document.getElementById('q'), w=document.getElementById('w');
 document.getElementById('log').onclick=()=>orca.postMessage({cmd:'openlog'});
-q.oninput=()=>{const s=q.value.toLowerCase();for(const t of document.querySelectorAll('.tile'))t.classList.toggle('hidden',!t.dataset.name.includes(s));};
+q.oninput=()=>{const s=q.value.toLowerCase();for(const t of document.querySelectorAll('.tile')){t.classList.toggle('hidden',!t.dataset.name.includes(s));if(typeof sync==='function')sync(t);}};
 w.oninput=()=>document.querySelector('.grid').style.setProperty('--w',w.value+'px');
 const plog=(t,event,fields)=>orca.postMessage({cmd:'log',host:t.dataset.host,event,fields:fields||{}});
-for(const img of document.querySelectorAll('.tile img')){const t=img.parentElement;img.dataset.src=img.getAttribute('src');
-  const alts=JSON.parse(img.dataset.alts||'[]');
-  img.onerror=()=>{if(alts.length&&!img.dataset.live){const next=alts.shift();plog(t,'stream_fallback',{from:img.dataset.src,to:next});img.dataset.src=next;img.src=next;return;}
-    if(!t.classList.contains('dead')){t.classList.add('dead');plog(t,'stream_dead',{url:img.dataset.src});}};
-  img.onload=()=>{img.dataset.live='1';if(t.classList.contains('dead')){t.classList.remove('dead');plog(t,'stream_recovered');}};}
-// Dead tiles retry on the user interval. Live tiles re-request every REFRESH_MS (#6): WebKit never fires error on an MJPEG stream that stalls with the socket open, and it grows memory on long streams. Click a tile to reload it.
-// A URL that has delivered a frame is marked live and never falls back to the next alt; a later error marks the tile dead and retries the same URL.
-// Clear src first so WebKit closes the old stream before opening the new one; some cameras (Elegoo, #10) allow very few clients.
-const reload=img=>{if(!img.dataset.src)return;img.src='';setTimeout(()=>{img.src=img.dataset.src+(img.dataset.src.includes('?')?'&':'?')+'_r='+Date.now();},0);};
+const tiles=[...document.querySelectorAll('.tile')];
+const LIVE_FPS=10, SNAP_S=10, ACTIVE=new Set(['printing','paused','pausing','homing','stopping','heating','resuming']);
+const isElegoo=u=>(u||'').includes(':3031/video');
+const bust=u=>u+(u.includes('?')?'&':'?')+'_r='+Date.now();
+const find=(b,x,y,from)=>{for(let i=from;i<b.length-1;i++)if(b[i]===x&&b[i+1]===y)return i;return -1;};
+function live(t){t.querySelector('img').dataset.live='1';if(t.classList.contains('dead')){t.classList.remove('dead');plog(t,'stream_recovered');}}
+function dead(t){if(!t.classList.contains('dead')){t.classList.add('dead');plog(t,'stream_dead',{url:t.dataset.src});}}
+// Render path A: fetch the MJPEG stream and draw each JPEG on a canvas. WebKit's multipart <img> loader leaks a Mach port per
+// frame until macOS kills the tab (#9); createImageBitmap does not. Live tiles are capped at LIVE_FPS; a snapshot takes one frame and aborts.
+// ponytail: frames are found by FFD8..FFD9 scan instead of parsing part headers; a JPEG with an embedded EXIF thumbnail would truncate.
+async function pump(t,url,snap,ac){
+  const r=await fetch(url,{signal:ac.signal,cache:'no-store'});
+  if(!r.ok)throw new Error('http '+r.status);
+  const rd=r.body.getReader(),cv=t.querySelector('canvas'),ctx=cv.getContext('2d');
+  let buf=new Uint8Array(0),last=0;
+  for(;;){const {value,done}=await rd.read();if(done)return;
+    const nb=new Uint8Array(buf.length+value.length);nb.set(buf);nb.set(value,buf.length);buf=nb;
+    for(;;){const st=find(buf,0xFF,0xD8,0);if(st<0){buf=new Uint8Array(0);break;}
+      const en=find(buf,0xFF,0xD9,st+2);if(en<0){buf=buf.slice(st);break;}
+      const jpg=buf.slice(st,en+2);buf=buf.slice(en+2);
+      const now=performance.now();if(!snap&&now-last<1000/LIVE_FPS)continue;last=now;
+      let bm;try{bm=await createImageBitmap(new Blob([jpg],{type:'image/jpeg'}));}catch(e){continue;}
+      if(cv.width!==bm.width||cv.height!==bm.height){cv.width=bm.width;cv.height=bm.height;}
+      ctx.drawImage(bm,0,0);bm.close();live(t);
+      if(snap){ac.abort();return;}}
+    if(buf.length>8e6)buf=new Uint8Array(0);}
+}
+async function run(t,snap){const img=t.querySelector('img'),ac=new AbortController();t._ac=ac;
+  for(;;){try{await pump(t,bust(t.dataset.src),snap,ac);if(!snap&&!ac.signal.aborted)dead(t);return;}
+    catch(e){if(ac.signal.aborted)return;
+      if(e.name==='TypeError'&&!img.dataset.live){t.dataset.mode='img';return imgStart(t,snap);}
+      if(t._alts.length&&!img.dataset.live){const next=t._alts.shift();plog(t,'stream_fallback',{from:t.dataset.src,to:next});t.dataset.src=next;continue;}
+      dead(t);return;}}}
+// Render path B: plain <img> MJPEG, used only when fetch is refused (fetch TypeError, then the image loads). If the image fails too the
+// mode is forgotten so the next attempt tries fetch again. Elegoo still counts a half-closed <img> socket, so Python cycles its video
+// (stream_reload) and we wait 2s. src is removed, not blanked: src='' fires error.
+function imgStart(t,snap){const img=t.querySelector('img'),sid=t._sid;img.onerror=img.onload=null;img.removeAttribute('src');
+  const el=isElegoo(t.dataset.src);if(el)plog(t,'stream_reload',{url:t.dataset.src});
+  img.onload=()=>{if(!img.dataset.live)plog(t,'stream_mode',{mode:'img'});live(t);if(snap){img.onerror=null;img.removeAttribute('src');}};
+  img.onerror=()=>{if(t._alts.length&&!img.dataset.live){const next=t._alts.shift();plog(t,'stream_fallback',{from:t.dataset.src,to:next});t.dataset.src=next;return imgStart(t,snap);}
+    delete t.dataset.mode;dead(t);};
+  setTimeout(()=>{if(t._sid===sid&&t.dataset.want!=='off')img.src=bust(t.dataset.src);},el?2000:0);}
+const openStream=(t,snap)=>t.dataset.mode==='img'?imgStart(t,snap):run(t,snap);
+// What a tile should be doing: off when scrolled away, filtered out or the tab is hidden; live when expanded or the printer is
+// busy (or its state is unknown); otherwise one snapshot every SNAP_S. Idle printers do not need video, but we keep tabs on them.
+let hidden=false;
+function want(t){if(!t.dataset.src||hidden||t._off||t.classList.contains('hidden'))return 'off';
+  if(t.classList.contains('full'))return 'live';const st=t.dataset.state;return st&&!ACTIVE.has(st)?'snap':'live';}
+function stop(t){clearTimeout(t._snapT);if(t._ac)t._ac.abort();t._ac=null;const img=t.querySelector('img');img.onerror=img.onload=null;img.removeAttribute('src');}
+function start(t){stop(t);t._sid=(t._sid||0)+1;const m=t.dataset.want=want(t);if(m==='off')return;
+  if(m==='snap'){const snap=()=>{if(t._ac)t._ac.abort();openStream(t,true);t._snapT=setTimeout(snap,SNAP_S*1000);};snap();}else openStream(t,false);}
+const sync=t=>{if(want(t)!==t.dataset.want)start(t);};
+for(const t of tiles){const img=t.querySelector('img');t.dataset.src=img.dataset.src||'';t._alts=JSON.parse(img.dataset.alts||'[]');}
+const observer=new IntersectionObserver(es=>{for(const e of es){e.target._off=!e.isIntersecting;sync(e.target);}},{rootMargin:'200px'});tiles.forEach(t=>observer.observe(t));
+document.addEventListener('visibilitychange',()=>{hidden=document.hidden;tiles.forEach(sync);});
+// Dead live tiles retry on the user interval; dead snapshot tiles retry on their own SNAP_S timer. <img> live tiles are re-requested
+// every REFRESH_MS (#6): WebKit never fires error on an MJPEG stream that stalls with the socket open, and it grows memory on long streams.
 const REFRESH_MS=15*60*1000;
-function refreshLive(){for(const t of document.querySelectorAll('.tile:not(.dead)')){const img=t.querySelector('img');img.dataset.live='1';reload(img);}}
-setInterval(refreshLive,REFRESH_MS);
+setInterval(()=>{for(const t of tiles)if(t.dataset.mode==='img'&&t.dataset.want==='live'&&!t.classList.contains('dead'))start(t);},REFRESH_MS);
 const ar=document.getElementById('ar'), ai=document.getElementById('ai'); let retryTimer=null;
 try{const sv=JSON.parse(localStorage.getItem('retry')||'{}');if('on'in sv)ar.checked=sv.on;if(sv.s)ai.value=String(sv.s);}catch(e){}
-function retryDead(){for(const t of document.querySelectorAll('.tile.dead'))reload(t.querySelector('img'));}
+function retryDead(){for(const t of tiles)if(t.classList.contains('dead')&&t.dataset.want==='live')start(t);}
 function schedule(){clearInterval(retryTimer);ai.disabled=!ar.checked;if(ar.checked)retryTimer=setInterval(retryDead,ai.value*1000);try{localStorage.setItem('retry',JSON.stringify({on:ar.checked,s:+ai.value}));}catch(e){}}
 ar.onchange=ai.onchange=schedule; schedule();
+tiles.forEach(start);
 window.onerror=(m,src,line)=>orca.postMessage({cmd:'log',event:'js_error',level:'error',fields:{message:String(m),line}});
-const unfull=()=>{document.querySelectorAll('.tile.full').forEach(t=>t.classList.remove('full'));if(typeof watch==='function')watch(null);};
+const unfull=()=>{document.querySelectorAll('.tile.full').forEach(t=>t.classList.remove('full'));if(typeof watch==='function')watch(null);tiles.forEach(sync);};
 const fmt=s=>s==null?'?':(s>=3600?Math.floor(s/3600)+'h':'')+Math.floor(s%3600/60)+'m';
 let timer=null, cur=null;
 const send=m=>orca.postMessage(m);
 function poll(){if(cur)send({cmd:'status',host:cur.dataset.host});}
 function watch(t){cur=t;clearInterval(timer);if(t){poll();timer=setInterval(poll,3000);}}
-for(const t of document.querySelectorAll('.tile')){t.onclick=e=>{if(e.target.closest('.hud'))return;if(t.querySelector('.hud').dataset.state==='confirm'){disarm(t);return;}const was=t.classList.contains('full');unfull();if(!was){t.classList.add('full');reload(t.querySelector('img'));watch(t);}else watch(null);};}
+// Every tile is polled every 10s so idle printers can drop to snapshots. ponytail: a printer that answers with an error (unsupported,
+// offline) is retried every 30th tick, 5 minutes, to keep status_failed out of the log.
+function pollAll(){for(const t of tiles){if(t===cur)continue;if(t._stErr&&(++t._stErr%30))continue;send({cmd:'status',host:t.dataset.host});}}
+setInterval(pollAll,10000);pollAll();
+for(const t of document.querySelectorAll('.tile')){t.onclick=e=>{if(e.target.closest('.hud'))return;if(t.querySelector('.hud').dataset.state==='confirm'){disarm(t);return;}const was=t.classList.contains('full');unfull();if(!was){t.classList.add('full');watch(t);sync(t);}else watch(null);};}
 const QUESTION={pause:['Pause this print?','Yes, pause'],resume:['Resume this print?','Yes, resume'],cancel:['Cancel this print?','Yes, cancel'],estop:['Emergency stop?','Yes, stop']};
 function disarm(t){const h=t.querySelector('.hud');clearTimeout(h._t);h.dataset.state='idle';h.querySelector('.confirm').hidden=true;h.querySelector('.actions').hidden=false;}
 function arm(t,cmd){const h=t.querySelector('.hud');disarm(t);h.dataset.state='confirm';const [q,y]=QUESTION[cmd];
@@ -392,8 +445,8 @@ function render(t,d){
 orca.onMessage(m=>{
   if(typeof m==='string')m=JSON.parse(m);
   const t=document.querySelector(`.tile[data-host="${CSS.escape(m.host)}"]`); if(!t)return;
-  if(m.type==='status')render(t,m.data);
-  else if(m.type==='error'){t.querySelector('.st').textContent=m.message;t.querySelectorAll('[data-cmd=pause],[data-cmd=resume],[data-cmd=cancel]').forEach(b=>b.disabled=true);}
+  if(m.type==='status'){t.dataset.state=m.data.state;t._stErr=0;render(t,m.data);sync(t);}
+  else if(m.type==='error'){t._stErr=t._stErr||1;t.querySelector('.st').textContent=m.message;t.querySelectorAll('[data-cmd=pause],[data-cmd=resume],[data-cmd=cancel]').forEach(b=>b.disabled=true);}
   if(m.type==='done'){t.querySelector('.hud').dataset.state='idle';t.querySelectorAll('.hud button').forEach(b=>b.disabled=false);poll();}
   if(m.type==='error'){t.querySelector('.hud').dataset.state='idle';t.querySelectorAll('[data-cmd=estop],[data-cmd=open],.no').forEach(b=>b.disabled=false);}
 });
@@ -406,7 +459,7 @@ def page_html(items: list[dict]) -> str:
     else:
         body = "".join(
             f"<div class='tile{'' if t['url'] else ' dead'}' data-name='{html.escape(t['name'].lower())}' data-host='{html.escape(t['host'])}'>"
-            f"<img src='{html.escape(t['url'])}' data-alts='{html.escape(json.dumps(t.get('alts', [])))}' alt=''><div class='cap'>{html.escape(t['name'])}</div>"
+            f"<img data-src='{html.escape(t['url'])}' data-alts='{html.escape(json.dumps(t.get('alts', [])))}' alt=''><canvas></canvas><div class='cap'>{html.escape(t['name'])}</div>"
             f"<div class='hud' data-state='idle'><span class='st'>{html.escape(t['name'])} · connecting…</span>"
             f"<div class='row actions'><button data-cmd='pause' data-confirm='1' disabled>⏸ Pause</button><button data-cmd='cancel' data-confirm='1' disabled>⏹ Cancel</button>"
             f"<button class='estop' data-cmd='estop' data-confirm='1'>⚠ E-Stop</button><button data-cmd='open'>↗ Open in browser</button></div>"
@@ -471,7 +524,7 @@ if orca is not None:
                     bundle = printers_from_bundle()
                 except Exception:
                     bundle = []
-                log("plugin_loaded", plugin_version="0.2.3", python=sys.version.split()[0], platform=f"{sys.platform} {platform.machine()}",
+                log("plugin_loaded", plugin_version="0.2.5", python=sys.version.split()[0], platform=f"{sys.platform} {platform.machine()}",
                     printers=[{"name": p["name"], "host": p["print_host"], "host_type": p["host_type"]} for p in bundle])
 
             def has_config_ui(self):
@@ -495,8 +548,9 @@ if orca is not None:
                     webbrowser.open(log_path().as_uri())
                     return
                 if cmd == "log":  # page-side events: stream dead/recovered, js errors
-                    log(msg.get("event", "page"), host, level=msg.get("level", "info"), **msg.get("fields", {}))
-                    if msg.get("event") == "stream_dead" and is_elegoo_stream(msg.get("fields", {}).get("url")):
+                    if msg.get("event") != "stream_reload":  # reloads are routine, keep the log for state changes
+                        log(msg.get("event", "page"), host, level=msg.get("level", "info"), **msg.get("fields", {}))
+                    if msg.get("event") in ("stream_dead", "stream_reload") and is_elegoo_stream(msg.get("fields", {}).get("url")):
                         threading.Thread(target=sdcp_enable_video, args=(host,), daemon=True).start()
                     return
                 def work():

@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.2.5
+- Draw MJPEG frames on a canvas via fetch instead of a multipart <img>; WebKit's <img> loader leaks a Mach port per frame until macOS kills the tab (#9). Falls back to <img> if the fetch is refused
+- Idle printers show one snapshot every 10s instead of a live stream; every tile is status-polled every 10s
+- Tiles scrolled out of view, filtered out, or on a hidden tab stop streaming (#7)
+
+## 0.2.4
+- Elegoo: cycle the camera before each tile reload and wait 2s, so the 15-minute refresh no longer kills the tile for up to a minute
+
 ## 0.2.3
 - Elegoo: cycle video Enable=0 then 1 over SDCP; the camera leaks client slots and answers "500 too many client" until it is disabled once
 

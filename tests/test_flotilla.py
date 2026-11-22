@@ -31,7 +31,9 @@ class Urls(unittest.TestCase):
         self.assertEqual(t[1]["alts"], [])  # explicit config: no guessing
         page = f.page_html(t)
         self.assertIn("stream.mjpg", page)
-        self.assertIn("refreshLive", page)  # #6: live tiles re-request every 15 min
+        self.assertIn("REFRESH_MS", page)  # #6: <img> live tiles re-request every 15 min
+        self.assertIn("createImageBitmap", page)  # #9: canvas path, no multipart <img> port leak
+        self.assertNotIn("<img src=", page)  # JS decides when a tile opens its stream
 
     @unittest.skipUnless(shutil.which("node"), "node not installed")
     def test_js_parses(self):
