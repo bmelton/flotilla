@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.2.7
+- Idle-printer snapshots are taken by Python (one JPEG, clean close) and pushed to the canvas; the <img> snapshot path left half-open sockets the Elegoo counted as clients
+- Once fetch is known to be refused, tiles stop probing it; unhandled JS rejections are logged
+
 ## 0.2.6
 - Snapshot tiles on the <img> path went black: the frame is now copied to the canvas before the stream is closed
 - Log why fetch was refused (stream_mode.error); Elegoo video is only cycled before a live reload, not before every snapshot

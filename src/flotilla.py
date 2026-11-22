@@ -5,7 +5,7 @@
 # name = "Flotilla"
 # description = "Watchtower-style camera grid for every printer OrcaSlicer knows about."
 # author = "Barry Melton"
-# version = "0.2.6"
+# version = "0.2.7"
 # license = "MIT"
 # ///
 """Flotilla tab: one tile per printer host, each an <img> on the printer's MJPEG stream.
@@ -248,6 +248,33 @@ def sdcp_enable_video(host: str) -> None:
         log("video_enable_failed", host, level="warn", ms=int((time.time() - t0) * 1000), error=f"{e.__class__.__name__}: {e}")
 
 
+def snapshot(urls: list[str], timeout: float = 5) -> tuple[str, bytes]:
+    """One JPEG from the first URL that yields one (MJPEG stream or plain JPEG): read until FFD8..FFD9, close.
+    Idle tiles use this every few seconds instead of holding a stream open, so WebKit never decodes them (#7, #9)."""
+    err: Exception = ValueError("no urls")
+    for url in urls:
+        try:
+            with urllib.request.urlopen(url, timeout=timeout) as r:
+                buf = b""
+                while len(buf) < 4_000_000:
+                    chunk = r.read(16384)
+                    if not chunk:
+                        break
+                    buf += chunk
+                    st = buf.find(b"\xff\xd8")
+                    if st >= 0:
+                        en = buf.find(b"\xff\xd9", st + 2)
+                        if en >= 0:
+                            return url, buf[st:en + 2]
+            raise ValueError("no JPEG frame")
+        except Exception as e:
+            err = e
+    raise err
+
+
+_snap_fail: dict[str, int] = {}  # host -> consecutive snapshot failures, for log throttling
+
+
 def is_elegoo_stream(url: str) -> bool:
     return ":3031/video" in (url or "")
 
@@ -386,12 +413,14 @@ async function run(t,snap){const img=t.querySelector('img'),ac=new AbortControll
 // (stream_reload) and we wait 2s. src is removed, not blanked: src='' fires error.
 function imgStart(t,snap){const img=t.querySelector('img'),sid=t._sid;img.onerror=img.onload=null;img.removeAttribute('src');
   const el=isElegoo(t.dataset.src)&&!snap;if(el)plog(t,'stream_reload',{url:t.dataset.src});
-  img.onload=()=>{if(!img.dataset.live)plog(t,'stream_mode',{mode:'img',error:t._fetchErr});live(t);
+  img.onload=()=>{if(!img.dataset.live){plog(t,'stream_mode',{mode:'img',error:t._fetchErr});if(t._fetchErr)fetchBlocked=true;}live(t);
     if(snap){const cv=t.querySelector('canvas');if(img.naturalWidth){cv.width=img.naturalWidth;cv.height=img.naturalHeight;cv.getContext('2d').drawImage(img,0,0);}img.onerror=null;img.removeAttribute('src');}};
   img.onerror=()=>{if(t._alts.length&&!img.dataset.live){const next=t._alts.shift();plog(t,'stream_fallback',{from:t.dataset.src,to:next});t.dataset.src=next;return imgStart(t,snap);}
     delete t.dataset.mode;dead(t);};
   setTimeout(()=>{if(t._sid===sid&&t.dataset.want!=='off')img.src=bust(t.dataset.src);},el?2000:0);}
-const openStream=(t,snap)=>t.dataset.mode==='img'?imgStart(t,snap):run(t,snap);
+// Once one tile proves fetch is refused here and <img> works, every tile skips the fetch probe (it may still open a socket, which the Elegoo counts).
+let fetchBlocked=false;
+const openStream=(t,snap)=>(fetchBlocked||t.dataset.mode==='img')?imgStart(t,snap):run(t,snap);
 // What a tile should be doing: off when scrolled away, filtered out or the tab is hidden; live when expanded or the printer is
 // busy (or its state is unknown); otherwise one snapshot every SNAP_S. Idle printers do not need video, but we keep tabs on them.
 let hidden=false;
@@ -399,7 +428,7 @@ function want(t){if(!t.dataset.src||hidden||t._off||t.classList.contains('hidden
   if(t.classList.contains('full'))return 'live';const st=t.dataset.state;return st&&!ACTIVE.has(st)?'snap':'live';}
 function stop(t){clearTimeout(t._snapT);if(t._ac)t._ac.abort();t._ac=null;const img=t.querySelector('img');img.onerror=img.onload=null;img.removeAttribute('src');}
 function start(t){stop(t);t._sid=(t._sid||0)+1;const m=t.dataset.want=want(t);if(m==='off')return;
-  if(m==='snap'){const snap=()=>{if(t._ac)t._ac.abort();openStream(t,true);t._snapT=setTimeout(snap,SNAP_S*1000);};snap();}else openStream(t,false);}
+  if(m==='snap'){const snap=()=>{send({cmd:'snap',host:t.dataset.host,urls:[t.dataset.src,...t._alts]});t._snapT=setTimeout(snap,SNAP_S*1000);};snap();}else openStream(t,false);}
 const sync=t=>{if(want(t)!==t.dataset.want)start(t);};
 for(const t of tiles){const img=t.querySelector('img');t.dataset.src=img.dataset.src||'';t._alts=JSON.parse(img.dataset.alts||'[]');}
 const observer=new IntersectionObserver(es=>{for(const e of es){e.target._off=!e.isIntersecting;sync(e.target);}},{rootMargin:'200px'});tiles.forEach(t=>observer.observe(t));
@@ -415,6 +444,7 @@ function schedule(){clearInterval(retryTimer);ai.disabled=!ar.checked;if(ar.chec
 ar.onchange=ai.onchange=schedule; schedule();
 tiles.forEach(start);
 window.onerror=(m,src,line)=>orca.postMessage({cmd:'log',event:'js_error',level:'error',fields:{message:String(m),line}});
+window.onunhandledrejection=e=>orca.postMessage({cmd:'log',event:'js_error',level:'error',fields:{message:'unhandled: '+String(e.reason&&e.reason.stack||e.reason)}});
 const unfull=()=>{document.querySelectorAll('.tile.full').forEach(t=>t.classList.remove('full'));if(typeof watch==='function')watch(null);tiles.forEach(sync);};
 const fmt=s=>s==null?'?':(s>=3600?Math.floor(s/3600)+'h':'')+Math.floor(s%3600/60)+'m';
 let timer=null, cur=null;
@@ -446,6 +476,10 @@ function render(t,d){
 orca.onMessage(m=>{
   if(typeof m==='string')m=JSON.parse(m);
   const t=document.querySelector(`.tile[data-host="${CSS.escape(m.host)}"]`); if(!t)return;
+  if(m.type==='frame'){if(m.url!==t.dataset.src){plog(t,'stream_fallback',{from:t.dataset.src,to:m.url});t._alts=t._alts.filter(u=>u!==m.url);t.dataset.src=m.url;}
+    const cv=t.querySelector('canvas');createImageBitmap(new Blob([Uint8Array.from(atob(m.jpg),c=>c.charCodeAt(0))],{type:'image/jpeg'})).then(bm=>{
+      if(cv.width!==bm.width||cv.height!==bm.height){cv.width=bm.width;cv.height=bm.height;}cv.getContext('2d').drawImage(bm,0,0);bm.close();live(t);}).catch(()=>{});return;}
+  if(m.type==='frame_failed'){dead(t);return;}
   if(m.type==='status'){t.dataset.state=m.data.state;t._stErr=0;render(t,m.data);sync(t);}
   else if(m.type==='error'){t._stErr=t._stErr||1;t.querySelector('.st').textContent=m.message;t.querySelectorAll('[data-cmd=pause],[data-cmd=resume],[data-cmd=cancel]').forEach(b=>b.disabled=true);}
   if(m.type==='done'){t.querySelector('.hud').dataset.state='idle';t.querySelectorAll('.hud button').forEach(b=>b.disabled=false);poll();}
@@ -525,7 +559,7 @@ if orca is not None:
                     bundle = printers_from_bundle()
                 except Exception:
                     bundle = []
-                log("plugin_loaded", plugin_version="0.2.6", python=sys.version.split()[0], platform=f"{sys.platform} {platform.machine()}",
+                log("plugin_loaded", plugin_version="0.2.7", python=sys.version.split()[0], platform=f"{sys.platform} {platform.machine()}",
                     printers=[{"name": p["name"], "host": p["print_host"], "host_type": p["host_type"]} for p in bundle])
 
             def has_config_ui(self):
@@ -553,6 +587,22 @@ if orca is not None:
                         log(msg.get("event", "page"), host, level=msg.get("level", "info"), **msg.get("fields", {}))
                     if msg.get("event") in ("stream_dead", "stream_reload") and is_elegoo_stream(msg.get("fields", {}).get("url")):
                         threading.Thread(target=sdcp_enable_video, args=(host,), daemon=True).start()
+                    return
+                if cmd == "snap":
+                    def snap():
+                        urls = msg.get("urls") or []
+                        try:
+                            url, jpg = snapshot(urls)
+                            _snap_fail.pop(host, None)
+                            self.post_message({"type": "frame", "host": host, "url": url, "jpg": base64.b64encode(jpg).decode()})
+                        except Exception as e:
+                            n = _snap_fail[host] = _snap_fail.get(host, 0) + 1
+                            if n in (1, 2) or n % 30 == 0:  # ponytail: 1st, 2nd, then every 5 min while it keeps failing
+                                log("snap_failed", host, level="warn", fails=n, error=f"{e.__class__.__name__}: {e}")
+                            self.post_message({"type": "frame_failed", "host": host})
+                            if any(is_elegoo_stream(u) for u in urls):
+                                sdcp_enable_video(host)
+                    threading.Thread(target=snap, daemon=True).start()
                     return
                 def work():
                     try:
