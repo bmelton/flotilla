@@ -31,7 +31,9 @@ class Urls(unittest.TestCase):
         self.assertEqual(t[1]["alts"], [])  # explicit config: no guessing
         page = f.page_html(t)
         self.assertIn("stream.mjpg", page)
-        self.assertIn("refreshLive", page)  # #6: live tiles re-request every 15 min
+        self.assertIn("REFRESH_MS", page)  # #6: <img> live tiles re-request every 15 min
+        self.assertIn("createImageBitmap", page)  # #9: canvas path, no multipart <img> port leak
+        self.assertNotIn("<img src=", page)  # JS decides when a tile opens its stream
 
     @unittest.skipUnless(shutil.which("node"), "node not installed")
     def test_js_parses(self):
@@ -84,3 +86,20 @@ class Log(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class Snapshot(unittest.TestCase):
+    def test_first_frame_from_mjpeg(self):
+        import io
+        body = b"--foo\r\nContent-Type: image/jpeg\r\n\r\n\xff\xd8junk\xff\xd9\r\n--foo\r\n\xff\xd8more\xff\xd9"
+        class R(io.BytesIO):
+            def __enter__(self): return self
+            def __exit__(self, *a): pass
+        orig = f.urllib.request.urlopen
+        f.urllib.request.urlopen = lambda url, timeout=0: (_ for _ in ()).throw(OSError("down")) if "bad" in url else R(body)
+        try:
+            self.assertEqual(f.snapshot(["http://bad/", "http://ok/"]), ("http://ok/", b"\xff\xd8junk\xff\xd9"))
+            with self.assertRaises(OSError):
+                f.snapshot(["http://bad/"])
+        finally:
+            f.urllib.request.urlopen = orig
