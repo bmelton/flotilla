@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.2.6
+- Snapshot tiles on the <img> path went black: the frame is now copied to the canvas before the stream is closed
+- Log why fetch was refused (stream_mode.error); Elegoo video is only cycled before a live reload, not before every snapshot
+
 ## 0.2.5
 - Draw MJPEG frames on a canvas via fetch instead of a multipart <img>; WebKit's <img> loader leaks a Mach port per frame until macOS kills the tab (#9). Falls back to <img> if the fetch is refused
 - Idle printers show one snapshot every 10s instead of a live stream; every tile is status-polled every 10s

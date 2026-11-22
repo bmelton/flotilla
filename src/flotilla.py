@@ -5,7 +5,7 @@
 # name = "Flotilla"
 # description = "Watchtower-style camera grid for every printer OrcaSlicer knows about."
 # author = "Barry Melton"
-# version = "0.2.5"
+# version = "0.2.6"
 # license = "MIT"
 # ///
 """Flotilla tab: one tile per printer host, each an <img> on the printer's MJPEG stream.
@@ -324,7 +324,7 @@ body{margin:0;background:var(--orca-bg,#1b1b1b);color:var(--orca-fg,#eee);font:1
 .grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(var(--w,340px),1fr));gap:12px;padding:12px}
 .tile{position:relative;background:#000;border:1px solid var(--orca-border,#333);border-radius:6px;overflow:hidden;aspect-ratio:4/3}
 .tile img,.tile canvas{width:100%;height:100%;object-fit:cover;display:block}
-.tile[data-mode=img] canvas,.tile:not([data-mode=img]) img,.tile.dead canvas{display:none}
+.tile img,.tile.dead canvas{display:none} .tile[data-mode=img][data-want=live] img{display:block} .tile[data-mode=img][data-want=live] canvas{display:none}
 .tile .cap{position:absolute;left:0;right:0;bottom:0;padding:6px;text-align:center;background:rgba(0,0,0,.55);color:#fff}
 .tile.dead img{display:none}
 .tile.dead::before{content:'no stream';position:absolute;inset:0;display:grid;place-items:center;color:var(--orca-muted,#888)}
@@ -378,15 +378,16 @@ async function pump(t,url,snap,ac){
 async function run(t,snap){const img=t.querySelector('img'),ac=new AbortController();t._ac=ac;
   for(;;){try{await pump(t,bust(t.dataset.src),snap,ac);if(!snap&&!ac.signal.aborted)dead(t);return;}
     catch(e){if(ac.signal.aborted)return;
-      if(e.name==='TypeError'&&!img.dataset.live){t.dataset.mode='img';return imgStart(t,snap);}
+      if(e.name==='TypeError'&&!img.dataset.live){t.dataset.mode='img';t._fetchErr=String(e);return imgStart(t,snap);}
       if(t._alts.length&&!img.dataset.live){const next=t._alts.shift();plog(t,'stream_fallback',{from:t.dataset.src,to:next});t.dataset.src=next;continue;}
       dead(t);return;}}}
 // Render path B: plain <img> MJPEG, used only when fetch is refused (fetch TypeError, then the image loads). If the image fails too the
 // mode is forgotten so the next attempt tries fetch again. Elegoo still counts a half-closed <img> socket, so Python cycles its video
 // (stream_reload) and we wait 2s. src is removed, not blanked: src='' fires error.
 function imgStart(t,snap){const img=t.querySelector('img'),sid=t._sid;img.onerror=img.onload=null;img.removeAttribute('src');
-  const el=isElegoo(t.dataset.src);if(el)plog(t,'stream_reload',{url:t.dataset.src});
-  img.onload=()=>{if(!img.dataset.live)plog(t,'stream_mode',{mode:'img'});live(t);if(snap){img.onerror=null;img.removeAttribute('src');}};
+  const el=isElegoo(t.dataset.src)&&!snap;if(el)plog(t,'stream_reload',{url:t.dataset.src});
+  img.onload=()=>{if(!img.dataset.live)plog(t,'stream_mode',{mode:'img',error:t._fetchErr});live(t);
+    if(snap){const cv=t.querySelector('canvas');if(img.naturalWidth){cv.width=img.naturalWidth;cv.height=img.naturalHeight;cv.getContext('2d').drawImage(img,0,0);}img.onerror=null;img.removeAttribute('src');}};
   img.onerror=()=>{if(t._alts.length&&!img.dataset.live){const next=t._alts.shift();plog(t,'stream_fallback',{from:t.dataset.src,to:next});t.dataset.src=next;return imgStart(t,snap);}
     delete t.dataset.mode;dead(t);};
   setTimeout(()=>{if(t._sid===sid&&t.dataset.want!=='off')img.src=bust(t.dataset.src);},el?2000:0);}
@@ -524,7 +525,7 @@ if orca is not None:
                     bundle = printers_from_bundle()
                 except Exception:
                     bundle = []
-                log("plugin_loaded", plugin_version="0.2.5", python=sys.version.split()[0], platform=f"{sys.platform} {platform.machine()}",
+                log("plugin_loaded", plugin_version="0.2.6", python=sys.version.split()[0], platform=f"{sys.platform} {platform.machine()}",
                     printers=[{"name": p["name"], "host": p["print_host"], "host_type": p["host_type"]} for p in bundle])
 
             def has_config_ui(self):
